@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feed Enhancer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d0d0f;
+    --surface:   #141418;
+    --surface2:  #1c1c22;
+    --border:    #2a2a33;
+    --accent:    #ff3b3b;
+    --accent2:   #ff7043;
+    --text:      #e8e8f0;
+    --muted:     #666678;
+    --green:     #22c55e;
+    --yellow:    #f59e0b;
+    --mono:      'Space Mono', monospace;
+    --sans:      'DM Sans', sans-serif;
+    --radius:    12px;
+    --transition: 220ms cubic-bezier(.4,0,.2,1);
+  }
+
+  html { font-family: var(--sans); background: var(--bg); color: var(--text); }
+
+  body {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* ── Header ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+  }
+  .logo-mark {
+    width: 32px; height: 32px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: 14px; font-weight: 700;
+    color: #fff; flex-shrink: 0;
+  }
+  header h1 { font-family: var(--mono); font-size: 15px; letter-spacing: .5px; }
+  header span { color: var(--muted); font-size: 13px; margin-left: auto; font-family: var(--mono); }
+
+  /* ── Layout ── */
+  main {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    height: calc(100vh - 60px);
+    overflow: hidden;
+  }
+
+  /* ── Left panel ── */
+  .panel-left {
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .panel-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-header h2 { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+  .feeds-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .feeds-list::-webkit-scrollbar { width: 4px; }
+  .feeds-list::-webkit-scrollbar-track { background: transparent; }
+  .feeds-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── Feed card ── */
+  .feed-card {
+    padding: 14px 16px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background var(--transition);
+    border: 1px solid transparent;
+    margin-bottom: 4px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .feed-card:hover { background: var(--surface2); }
+  .feed-card.active { background: var(--surface2); border-color: var(--border); }
+  .feed-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: grid; place-items: center; flex-shrink: 0;
+    font-size: 16px;
+  }
+  .feed-icon.status-pending  { background: rgba(245,158,11,.12); }
+  .feed-icon.status-processing { background: rgba(99,102,241,.12); animation: pulse 1.5s infinite; }
+  .feed-icon.status-done     { background: rgba(34,197,94,.12); }
+  .feed-icon.status-error    { background: rgba(255,59,59,.12); }
+
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+
+  .feed-info { flex: 1; min-width: 0; }
+  .feed-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feed-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .status-badge {
+    font-size: 11px; font-family: var(--mono); padding: 3px 8px;
+    border-radius: 6px; white-space: nowrap; flex-shrink: 0;
+  }
+  .status-badge.pending    { background: rgba(245,158,11,.15); color: var(--yellow); }
+  .status-badge.processing { background: rgba(99,102,241,.15); color: #818cf8; }
+  .status-badge.done       { background: rgba(34,197,94,.15);  color: var(--green); }
+  .status-badge.error      { background: rgba(255,59,59,.15);  color: var(--accent); }
+
+  .empty-state {
+    text-align: center; padding: 60px 24px; color: var(--muted);
+  }
+  .empty-state .icon { font-size: 48px; display: block; margin-bottom: 12px; }
+  .empty-state p { font-size: 14px; line-height: 1.6; }
+
+  /* ── Right panel ── */
+  .panel-right {
+    display: flex; flex-direction: column;
+    overflow-y: auto; padding: 32px;
+    gap: 28px;
+  }
+  .panel-right::-webkit-scrollbar { width: 4px; }
+  .panel-right::-webkit-scrollbar-track { background: transparent; }
+  .panel-right::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .card-title {
+    font-size: 12px; font-weight: 600; color: var(--muted);
+    letter-spacing: 1px; text-transform: uppercase; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-title::before {
+    content: ''; display: block; width: 3px; height: 14px;
+    background: var(--accent); border-radius: 2px;
+  }
+
+  /* ── Form elements ── */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-group { display: flex; flex-direction: column; gap: 8px; }
+  .form-group.full { grid-column: 1 / -1; }
+
+  label { font-size: 12px; color: var(--muted); font-weight: 500; letter-spacing: .3px; }
+
+  input[type=text], input[type=number], select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color var(--transition);
+    width: 100%;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  select option { background: var(--surface2); }
+
+  /* Color picker row */
+  .color-row { display: flex; gap: 8px; align-items: center; }
+  .color-row input[type=color] {
+    width: 40px; height: 40px; padding: 2px; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border);
+    cursor: pointer; flex-shrink: 0;
+  }
+  .color-row input[type=text] { flex: 1; font-family: var(--mono); }
+
+  /* Upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--transition);
+    position: relative;
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--accent); background: rgba(255,59,59,.04); }
+  .upload-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .upload-zone .upload-icon { font-size: 32px; margin-bottom: 8px; }
+  .upload-zone p { font-size: 14px; color: var(--muted); }
+  .upload-zone strong { color: var(--text); }
+  .upload-zone .file-name { margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 11px 20px; border-radius: 8px; border: none;
+    font-family: var(--sans); font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: all var(--transition);
+    text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #e02d2d; }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-danger { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn-danger:hover { background: rgba(255,59,59,.1); }
+  .btn-ghost { background: transparent; color: var(--muted); }
+  .btn-ghost:hover { color: var(--text); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+  .btn-sm { padding: 7px 14px; font-size: 13px; }
+
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+
+  /* Progress */
+  .progress-block {
+    background: var(--surface2); border-radius: 10px; padding: 16px 20px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .progress-spinner {
+    width: 20px; height: 20px; border: 2px solid var(--border);
+    border-top-color: #818cf8; border-radius: 50%;
+    animation: spin .8s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-text { font-size: 14px; }
+
+  /* Detail view */
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .detail-item label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .detail-item span {
+    font-size: 13px; font-family: var(--mono);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; display: block;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .color-preview {
+    display: inline-block; width: 12px; height: 12px;
+    border-radius: 3px; margin-right: 6px; vertical-align: middle;
+  }
+
+  /* Welcome screen */
+  .welcome {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 60vh; text-align: center; gap: 12px;
+  }
+  .welcome .big-icon { font-size: 64px; }
+  .welcome h2 { font-size: 20px; font-weight: 500; }
+  .welcome p { color: var(--muted); font-size: 14px; max-width: 340px; line-height: 1.6; }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 999;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px;
+    font-size: 14px; max-width: 320px;
+    transform: translateY(100px); opacity: 0;
+    transition: all .3s; pointer-events: none;
+  }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast.success { border-left: 3px solid var(--green); }
+  #toast.error   { border-left: 3px solid var(--accent); }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  }
+  @media (max-width: 900px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-box {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; text-align: center;
+  }
+  .stat-box.success { border-color: rgba(34,197,94,.3); }
+  .stat-box.warn    { border-color: rgba(245,158,11,.3); }
+  .stat-value {
+    font-family: var(--mono); font-size: 28px; font-weight: 700;
+    color: var(--text); line-height: 1;
+  }
+  .stat-box.success .stat-value { color: var(--green); }
+  .stat-box.warn    .stat-value { color: var(--yellow); }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  /* Preview block */
+  .preview-wrap {
+    position: relative; border-radius: 12px; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--border);
+    min-height: 200px; display: flex; align-items: center; justify-content: center;
+  }
+  .preview-wrap img {
+    width: 100%; max-height: 420px; object-fit: contain;
+    display: block; border-radius: 12px;
+    transition: opacity .3s;
+  }
+  .preview-wrap img.loading { opacity: 0.3; }
+  .preview-badge {
+    position: absolute; top: 10px; left: 10px;
+    background: rgba(0,0,0,.65); backdrop-filter: blur(6px);
+    border-radius: 6px; padding: 4px 10px;
+    font-size: 11px; font-family: var(--mono); color: #fff;
+  }
+  .preview-empty {
+    text-align: center; color: var(--muted); padding: 40px; font-size: 14px;
+  }
+  .preview-empty .icon { font-size: 40px; display: block; margin-bottom: 8px; }
+
+  /* Toggle switch */
+  .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; inset: 0; background: var(--border);
+    border-radius: 24px; cursor: pointer; transition: background var(--transition);
+  }
+  .toggle-slider::before {
+    content: ''; position: absolute;
+    width: 18px; height: 18px; left: 3px; top: 3px;
+    background: #fff; border-radius: 50%;
+    transition: transform var(--transition);
+  }
+  .toggle input:checked + .toggle-slider { background: var(--green); }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+  /* Public URL box */
+  .public-url-box {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--green);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .public-url-box span {
+    font-family: var(--mono); font-size: 12px; color: var(--green);
+    flex: 1; word-break: break-all;
+  }
+
+  /* Divider */
+  hr { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
+
+  /* ── Source tabs (Файл / URL) ── */
+  .tab-row {
+    display: flex; gap: 4px;
+    background: var(--bg); border-radius: 10px; padding: 4px;
+    border: 1px solid var(--border); margin-bottom: 20px;
+  }
+  .tab-btn {
+    flex: 1; padding: 8px 12px; border: none; border-radius: 7px;
+    background: transparent; color: var(--muted);
+    font-family: var(--sans); font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: all var(--transition);
+  }
+  .tab-btn.active { background: var(--surface2); color: var(--text); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* URL source badge */
+  .source-url-badge {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    word-break: break-all;
+  }
+  .source-url-badge span { color: var(--text); flex: 1; }
+  .last-fetched { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  @media (max-width: 768px) {
+    main { grid-template-columns: 1fr; }
+    .panel-left { height: auto; max-height: 40vh; }
+    .panel-right { padding: 20px; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">FE</div>
+  <h1>Feed Enhancer</h1>
+  <span id="server-status">● live</span>
+</header>
+
+<main>
+  <!-- ═══ LEFT: список фідів ═══ -->
+  <aside class="panel-left">
+    <div class="panel-header">
+      <h2>Фіди</h2>
+      <button class="btn btn-primary btn-sm" onclick="showAddPanel()">+ Додати</button>
+    </div>
+    <div class="feeds-list" id="feeds-list">
+      <div class="empty-state">
+        <span class="icon">📂</span>
+        <p>Фідів ще немає.<br>Натисни <strong>+ Додати</strong>, щоб завантажити перший XML.</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ RIGHT: деталі / форма додавання ═══ -->
+  <section class="panel-right" id="panel-right">
+    <div class="welcome">
+      <div class="big-icon">🚀</div>
+      <h2>Почни з додавання фіду</h2>
+      <p>Завантаж XML фід Google Merchant або Meta Catalog. Сервіс обведе зображення рамкою та додасть бейдж ціни.</p>
+      <button class="btn btn-primary" style="margin-top:8px" onclick="showAddPanel()">Додати перший фід</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────
+let feeds     = [];
+let activeFeedId = null;
+let pollTimer = null;
+
+// ─────────────────────────────────────────────────────────
+// API helpers
+// ─────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body instanceof FormData) {
+    opts.body = body;
+  } else if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ error: r.statusText }));
+    throw new Error(err.error || r.statusText);
+  }
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r;
+}
+
+// ─────────────────────────────────────────────────────────
+// Toast
+// ─────────────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.className = '', 3500);
+}
+
+// ─────────────────────────────────────────────────────────
+// Render feeds list
+// ─────────────────────────────────────────────────────────
+const statusEmoji = { pending:'⏳', processing:'⚙️', done:'✅', error:'❌' };
+const statusLabel = { pending:'очікує', processing:'обробка', done:'готово', error:'помилка' };
+
+function renderList() {
+  const el = document.getElementById('feeds-list');
+  if (!feeds.length) {
+    el.innerHTML = `<div class="empty-state"><span class="icon">📂</span>
+      <p>Фідів ще немає.<br>Натисни <strong>+ Додати</strong>.</p></div>`;
+    return;
+  }
+  el.innerHTML = feeds.map(f => `
+    <div class="feed-card ${f.id === activeFeedId ? 'active' : ''}"
+         onclick="selectFeed('${f.id}')">
+      <div class="feed-icon status-${f.status}">${statusEmoji[f.status] || '📄'}</div>
+      <div class="feed-info">
+        <div class="feed-name">${esc(f.name)}</div>
+        <div class="feed-meta">${formatDate(f.created_at)}</div>
+      </div>
+      <span class="status-badge ${f.status}">${statusLabel[f.status] || f.status}</span>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────────────────────────
+// Load feeds
+// ─────────────────────────────────────────────────────────
+async function loadFeeds() {
+  try {
+    feeds = await api('GET', '/api/feeds');
+    renderList();
+    if (activeFeedId) renderDetail(feeds.find(f => f.id === activeFeedId));
+  } catch(e) { console.error(e); }
+}
+
+// ─────────────────────────────────────────────────────────
+// Select feed → show detail
+// ─────────────────────────────────────────────────────────
+function selectFeed(id) {
+  activeFeedId = id;
+  renderList();
+  const feed = feeds.find(f => f.id === id);
+  if (feed) renderDetail(feed);
+}
+
+function renderDetail(feed) {
+  if (!feed) return;
+  const cfg   = feed.config   || {};
+  const sched = feed.schedule || {};
+  const right = document.getElementById('panel-right');
+  const isUrl = feed.source_type === 'url';
+
+  right.innerHTML = `
+    <div class="card">
+      <div class="card-title">Інформація про фід</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Назва</label><span>${esc(feed.name)}</span></div>
+        <div class="detail-item"><label>ID</label><span>${feed.id}</span></div>
+        <div class="detail-item"><label>Джерело</label>
+          <span>${isUrl ? '🔗 URL' : '📄 Файл'}</span>
+        </div>
+        <div class="detail-item"><label>Статус</label>
+          <span><span class="status-badge ${feed.status}">${statusLabel[feed.status]}</span></span>
+        </div>
+        <div class="detail-item"><label>Створено</label><span>${formatDate(feed.created_at)}</span></div>
+        ${feed.finished_at ? `<div class="detail-item"><label>Оброблено</label><span>${formatDate(feed.finished_at)}</span></div>` : ''}
+      </div>
+
+      ${isUrl ? `
+      <div style="margin-top:16px">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px">URL джерела</label>
+        <div class="source-url-badge">
+          <span>🔗</span><span>${esc(feed.source_url)}</span>
+        </div>
+        ${feed.last_fetched ? `<div class="last-fetched">Останнє завантаження: ${formatDate(feed.last_fetched)}</div>` : ''}
+      </div>` : ''}
+    </div>
+
+    ${feed.status === 'processing' ? `
+    <div class="progress-block">
+      <div class="progress-spinner"></div>
+      <span class="progress-text">${esc(feed.progress || 'Обробка...')}</span>
+    </div>` : ''}
+
+    ${feed.status === 'error' ? `
+    <div class="progress-block" style="border-left:3px solid var(--accent)">
+      <span>❌</span>
+      <span class="progress-text" style="color:var(--accent)">${esc(feed.progress)}</span>
+    </div>` : ''}
+
+    ${feed.stats ? `
+    <div class="card">
+      <div class="card-title">Статистика обробки</div>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-value">${feed.stats.total}</div>
+          <div class="stat-label">Всього товарів</div>
+        </div>
+        <div class="stat-box success">
+          <div class="stat-value">${feed.stats.success}</div>
+          <div class="stat-label">Оброблено</div>
+        </div>
+        <div class="stat-box ${feed.stats.skipped > 0 ? 'warn' : ''}">
+          <div class="stat-value">${feed.stats.skipped}</div>
+          <div class="stat-label">Пропущено</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value">${feed.stats.total > 0 ? Math.round(feed.stats.success / feed.stats.total * 100) : 0}%</div>
+          <div class="stat-label">Успіх</div>
+        </div>
+      </div>
+      ${feed.stats.skipped > 0 ? `<p style="font-size:12px;color:var(--muted);margin-top:12px">⚠️ Пропущені — позиції без URL зображення або з недоступним файлом.</p>` : ''}
+    </div>` : ''}
+
+    ${feed.status === 'done' ? `
+    <div class="card">
+      <div class="card-title">Попередній перегляд банера</div>
+      <div class="preview-wrap" id="preview-wrap">
+        <div class="preview-empty"><span class="icon">🖼</span>Завантаження...</div>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-secondary btn-sm" onclick="loadPreview('${feed.id}')">🔀 Інший випадковий банер</button>
+        <span id="preview-counter" style="font-size:12px;color:var(--muted);align-self:center"></span>
+      </div>
+    </div>` : ''}
+
+    ${feed.public_url ? `
+    <div class="card">
+      <div class="card-title">Публічний URL фіду</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+        Вставляй цей URL напряму в Google Merchant Center або Meta Catalog — він завжди повертає останній оброблений фід.
+      </p>
+      <div class="public-url-box">
+        <span id="pub-url-text">${esc(feed.public_url)}</span>
+        <button class="btn btn-secondary btn-sm" onclick="copyPublicUrl()">📋 Копіювати</button>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <a class="btn btn-ghost btn-sm" href="${feed.public_url}" target="_blank">🔗 Відкрити у браузері</a>
+        <a class="btn btn-secondary btn-sm" href="/api/feeds/${feed.id}/download">⬇ Скачати файл</a>
+      </div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-title">Налаштування оформлення</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Колір обводки</label>
+          <div class="color-row">
+            <input type="color" id="d-border-color" value="${cfg.border_color || '#FF0000'}"
+                   oninput="document.getElementById('d-border-color-text').value=this.value">
+            <input type="text" id="d-border-color-text" value="${cfg.border_color || '#FF0000'}" maxlength="7"
+                   oninput="document.getElementById('d-border-color').value=this.value">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Товщина обводки (px)</label>
+          <input type="number" id="d-border-width" value="${cfg.border_width || 18}" min="1" max="60">
+        </div>
+        <div class="form-group">
+          <label>Позиція ціни</label>
+          <select id="d-badge-position">
+            ${['bottom-right','bottom-left','top-right','top-left'].map(p =>
+              `<option ${p === (cfg.badge_position||'bottom-right') ? 'selected' : ''}>${p}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Розмір шрифту ціни (px)</label>
+          <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size || 52}" min="16" max="120">
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:16px">
+        ${isUrl
+          ? `<button class="btn btn-primary" onclick="refreshFeed('${feed.id}')">🔄 Оновити з URL і обробити</button>
+             <button class="btn btn-secondary" onclick="reprocess('${feed.id}')">▶ Без оновлення</button>`
+          : `<button class="btn btn-primary" onclick="reprocess('${feed.id}')">▶ Обробити з цими налаштуваннями</button>`
+        }
+      </div>
+    </div>
+
+    ${isUrl ? `
+    <div class="card">
+      <div class="card-title">Автооновлення</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+        Сервіс автоматично завантажить свіжий фід з URL і переобробить його за вказаним розкладом.
+      </p>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Інтервал оновлення</label>
+          <select id="d-sched-interval">
+            ${[
+              [1,'Кожну годину'], [3,'Кожні 3 години'], [6,'Кожні 6 годин'],
+              [12,'Кожні 12 годин'], [24,'Раз на добу'], [48,'Раз на 2 дні'], [168,'Раз на тиждень']
+            ].map(([v,l]) => `<option value="${v}" ${(sched.interval_hours||24)==v?'selected':''}>${l}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" style="justify-content:flex-end">
+          <label>&nbsp;</label>
+          <div style="display:flex;align-items:center;gap:10px;height:42px">
+            <span style="font-size:13px;color:var(--muted)">Увімкнено</span>
+            <label class="toggle">
+              <input type="checkbox" id="d-sched-enabled" ${sched.enabled ? 'checked' : ''} onchange="saveSchedule('${feed.id}')">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-secondary btn-sm" onclick="saveSchedule('${feed.id}')">💾 Зберегти розклад</button>
+      </div>
+      ${sched.last_run ? `<p style="font-size:12px;color:var(--muted);margin-top:10px">Останнє автооновлення: ${formatDate(sched.last_run)}</p>` : ''}
+      ${sched.enabled ? `<p style="font-size:12px;color:var(--green);margin-top:6px">● Автооновлення активне</p>` : ''}
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-title">Небезпечна зона</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Видалення фіду незворотнє. Всі файли будуть знищені.</p>
+      <button class="btn btn-danger btn-sm" onclick="deleteFeed('${feed.id}')">🗑 Видалити фід</button>
+    </div>
+  `;
+
+  if (feed.status === 'processing') startPolling(feed.id);
+  else stopPolling();
+
+  // Автоматично завантажуємо превʼю якщо фід готовий
+  if (feed.status === 'done') {
+    setTimeout(() => loadPreview(feed.id), 50);
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Preview
+// ─────────────────────────────────────────────────────────
+async function loadPreview(feedId) {
+  const wrap    = document.getElementById('preview-wrap');
+  const counter = document.getElementById('preview-counter');
+  if (!wrap) return;
+
+  // Показуємо спіннер
+  wrap.innerHTML = `
+    <div class="preview-empty">
+      <div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:#818cf8;
+                  border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px"></div>
+      Завантаження...
+    </div>`;
+
+  try {
+    const data = await api('GET', `/api/feeds/${feedId}/preview`);
+
+    wrap.innerHTML = `
+      <img id="preview-img" src="${data.image_url}"
+           alt="Preview"
+           onload="this.classList.remove('loading')"
+           onerror="document.getElementById('preview-wrap').innerHTML='<div class=\\'preview-empty\\'><span class=\\'icon\\'>❌</span>Не вдалося завантажити зображення</div>'"
+           class="loading">
+      <div class="preview-badge">Банер</div>
+    `;
+
+    if (counter) counter.textContent = `${data.total} банерів у фіді`;
+
+  } catch(e) {
+    wrap.innerHTML = `<div class="preview-empty"><span class="icon">⚠️</span>${esc(e.message)}</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Polling
+// ─────────────────────────────────────────────────────────
+function startPolling(id) {
+  stopPolling();
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await api('GET', `/api/feeds/${id}/status`);
+      const idx = feeds.findIndex(f => f.id === id);
+      if (idx !== -1) {
+        feeds[idx].status      = s.status;
+        feeds[idx].progress    = s.progress;
+        feeds[idx].finished_at = s.finished_at;
+        if (s.stats)       feeds[idx].stats      = s.stats;
+        if (s.public_url)  feeds[idx].public_url = s.public_url;
+      }
+      renderList();
+      if (activeFeedId === id) renderDetail(feeds[idx]);
+      if (s.status !== 'processing') {
+        stopPolling();
+        if (s.status === 'done') toast('✅ Фід успішно оброблено!');
+        if (s.status === 'error') toast('❌ Помилка обробки', 'error');
+      }
+    } catch(e) {}
+  }, 2000);
+}
+function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+
+// ─────────────────────────────────────────────────────────
+// Show add panel
+// ─────────────────────────────────────────────────────────
+function showAddPanel() {
+  activeFeedId = null;
+  renderList();
+  const right = document.getElementById('panel-right');
+  right.innerHTML = `
+    <div class="card">
+      <div class="card-title">Додати новий фід</div>
+
+      <!-- Таби: Файл / URL -->
+      <div class="tab-row">
+        <button class="tab-btn active" onclick="switchTab('file')">📄 Завантажити файл</button>
+        <button class="tab-btn"        onclick="switchTab('url')">🔗 Вказати URL</button>
+      </div>
+
+      <!-- Пейн: Файл -->
+      <div class="tab-pane active" id="tab-file">
+        <div class="form-grid">
+          <div class="form-group full">
+            <label>Назва фіду</label>
+            <input type="text" id="add-name" placeholder="Наприклад: Основний магазин">
+          </div>
+          <div class="form-group full">
+            <label>XML файл</label>
+            <div class="upload-zone" id="upload-zone">
+              <input type="file" id="add-file" accept=".xml" onchange="onFileChange(this)">
+              <div class="upload-icon">📄</div>
+              <p><strong>Натисни або перетягни</strong> XML файл сюди</p>
+              <p style="margin-top:4px;font-size:12px">Google Merchant / Meta Catalog формат</p>
+              <div class="file-name" id="file-name-display"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Пейн: URL -->
+      <div class="tab-pane" id="tab-url">
+        <div class="form-grid">
+          <div class="form-group full">
+            <label>Назва фіду</label>
+            <input type="text" id="add-name-url" placeholder="Наприклад: Google Merchant Feed">
+          </div>
+          <div class="form-group full">
+            <label>URL XML фіду</label>
+            <input type="text" id="add-feed-url"
+              placeholder="https://myshop.com/feed.xml"
+              oninput="onUrlInput(this)">
+            <span style="font-size:11px;color:var(--muted);margin-top:4px">
+              Пряме посилання на публічний XML файл. Сервіс завантажить його автоматично.
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Налаштування оформлення</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Колір обводки</label>
+          <div class="color-row">
+            <input type="color" id="add-border-color" value="#FF0000"
+                   oninput="document.getElementById('add-border-color-text').value=this.value">
+            <input type="text" id="add-border-color-text" value="#FF0000" maxlength="7"
+                   oninput="document.getElementById('add-border-color').value=this.value">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Товщина обводки (px)</label>
+          <input type="number" id="add-border-width" value="18" min="1" max="60">
+        </div>
+        <div class="form-group">
+          <label>Позиція ціни</label>
+          <select id="add-badge-position">
+            <option>bottom-right</option>
+            <option>bottom-left</option>
+            <option>top-right</option>
+            <option>top-left</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Розмір шрифту ціни (px)</label>
+          <input type="number" id="add-badge-font-size" value="52" min="16" max="120">
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-primary" id="submit-btn" onclick="submitFeed()">⬆ Додати та обробити</button>
+        <button class="btn btn-ghost" onclick="loadFeeds();">Скасувати</button>
+      </div>
+    </div>
+  `;
+
+  // Drag & drop
+  const zone = document.getElementById('upload-zone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag');
+    const f = e.dataTransfer.files[0];
+    if (f) { document.getElementById('add-file').files = e.dataTransfer.files; onFileChange({ files: [f] }); }
+  });
+}
+
+// Перемикання табів
+let activeTab = 'file';
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', (i === 0) === (tab === 'file')));
+  document.getElementById('tab-file').classList.toggle('active', tab === 'file');
+  document.getElementById('tab-url').classList.toggle('active', tab === 'url');
+}
+
+function onUrlInput(input) {
+  const nameField = document.getElementById('add-name-url');
+  if (!nameField.value && input.value) {
+    try {
+      const url = new URL(input.value);
+      const part = url.pathname.split('/').filter(Boolean).pop() || url.hostname;
+      nameField.value = part.replace('.xml', '');
+    } catch(e) {}
+  }
+}
+
+function onFileChange(input) {
+  const f = input.files[0];
+  if (!f) return;
+  document.getElementById('file-name-display').textContent = f.name;
+  if (!document.getElementById('add-name').value)
+    document.getElementById('add-name').value = f.name.replace('.xml','');
+}
+
+// ─────────────────────────────────────────────────────────
+// Submit new feed
+// ─────────────────────────────────────────────────────────
+async function submitFeed() {
+  const btn = document.getElementById('submit-btn');
+
+  const sharedCfg = () => ({
+    border_color:    document.getElementById('add-border-color').value,
+    border_width:    document.getElementById('add-border-width').value,
+    badge_position:  document.getElementById('add-badge-position').value,
+    badge_font_size: document.getElementById('add-badge-font-size').value,
+  });
+
+  const fd = new FormData();
+  Object.entries(sharedCfg()).forEach(([k, v]) => fd.append(k, v));
+  fd.append('auto_process', 'true');
+
+  // ── Режим URL ──
+  if (activeTab === 'url') {
+    const url  = document.getElementById('add-feed-url').value.trim();
+    const name = document.getElementById('add-name-url').value.trim();
+    if (!url) { toast('Вкажіть URL фіду', 'error'); return; }
+    if (!url.startsWith('http')) { toast('URL має починатись з http:// або https://', 'error'); return; }
+    fd.append('feed_url', url);
+    fd.append('name', name || url);
+  }
+  // ── Режим файл ──
+  else {
+    const fileInput = document.getElementById('add-file');
+    if (!fileInput.files[0]) { toast('Оберіть XML файл', 'error'); return; }
+    fd.append('file', fileInput.files[0]);
+    fd.append('name', document.getElementById('add-name').value || fileInput.files[0].name);
+  }
+
+  btn.disabled = true; btn.textContent = 'Завантаження...';
+
+  try {
+    const feed = await api('POST', '/api/feeds', fd);
+    feeds.unshift(feed);
+    toast('✅ Фід додано, починаємо обробку...');
+    selectFeed(feed.id);
+    await loadFeeds();
+    startPolling(feed.id);
+  } catch(e) {
+    toast(e.message, 'error');
+    btn.disabled = false; btn.textContent = '⬆ Додати та обробити';
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Schedule
+// ─────────────────────────────────────────────────────────
+async function saveSchedule(id) {
+  const enabled  = document.getElementById('d-sched-enabled').checked;
+  const interval = parseInt(document.getElementById('d-sched-interval').value);
+  try {
+    await api('PATCH', `/api/feeds/${id}/schedule`, { enabled, interval_hours: interval });
+    // Оновлюємо локально
+    const idx = feeds.findIndex(f => f.id === id);
+    if (idx !== -1) {
+      feeds[idx].schedule = { ...feeds[idx].schedule, enabled, interval_hours: interval };
+      renderDetail(feeds[idx]);
+    }
+    toast(enabled ? `✅ Автооновлення увімкнено — кожні ${interval}г` : '⏹ Автооновлення вимкнено');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────
+// Copy public URL
+// ─────────────────────────────────────────────────────────
+function copyPublicUrl() {
+  const url = document.getElementById('pub-url-text').textContent;
+  navigator.clipboard.writeText(url).then(() => toast('📋 URL скопійовано!')).catch(() => {
+    prompt('Скопіюй URL:', url);
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// Reprocess (без перезавантаження з URL)
+// ─────────────────────────────────────────────────────────
+async function reprocess(id) {
+  const body = {
+    border_color:    document.getElementById('d-border-color').value,
+    border_width:    document.getElementById('d-border-width').value,
+    badge_position:  document.getElementById('d-badge-position').value,
+    badge_font_size: document.getElementById('d-badge-font-size').value,
+  };
+  try {
+    await api('POST', `/api/feeds/${id}/process`, body);
+    toast('⚙️ Обробка запущена...');
+    await loadFeeds();
+    startPolling(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────
+// Refresh (завантажити свіжий XML з URL + обробити)
+// ─────────────────────────────────────────────────────────
+async function refreshFeed(id) {
+  const body = {
+    border_color:    document.getElementById('d-border-color').value,
+    border_width:    document.getElementById('d-border-width').value,
+    badge_position:  document.getElementById('d-badge-position').value,
+    badge_font_size: document.getElementById('d-badge-font-size').value,
+  };
+  try {
+    await api('POST', `/api/feeds/${id}/refresh`, body);
+    toast('🔄 Завантажуємо оновлений фід з URL...');
+    await loadFeeds();
+    startPolling(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────
+// Delete
+// ─────────────────────────────────────────────────────────
+async function deleteFeed(id) {
+  if (!confirm('Видалити фід? Цю дію не можна скасувати.')) return;
+  try {
+    await api('DELETE', `/api/feeds/${id}`);
+    feeds = feeds.filter(f => f.id !== id);
+    activeFeedId = null;
+    renderList();
+    document.getElementById('panel-right').innerHTML = `
+      <div class="welcome">
+        <div class="big-icon">🗑</div>
+        <h2>Фід видалено</h2>
+        <button class="btn btn-primary" style="margin-top:8px" onclick="showAddPanel()">Додати новий</button>
+      </div>`;
+    toast('Фід видалено');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('uk-UA', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+// ─────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────
+loadFeeds();
+setInterval(loadFeeds, 10000); // оновлюємо список кожні 10с
+</script>
+</body>
+</html>
