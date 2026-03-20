@@ -93,6 +93,7 @@ def run_processing(feed_id, input_path, cfg, source_url=None):
             update_feed(feed_id, {"status": "processing", "progress": f"Завантаження фіду з {source_url}..."})
             download_feed_from_url(source_url, input_path)
             update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
+            cfg["source_url"] = source_url  # для автовитягування домену
 
         update_feed(feed_id, {"status": "processing", "progress": "Обробка зображень..."})
 
@@ -264,6 +265,8 @@ def add_feed():
     cfg["border_width"]    = int(request.form.get("border_width", cfg["border_width"]))
     cfg["badge_position"]  = request.form.get("badge_position",  cfg["badge_position"])
     cfg["badge_font_size"] = int(request.form.get("badge_font_size", cfg["badge_font_size"]))
+    cfg["banner_style"]    = request.form.get("banner_style",    cfg.get("banner_style", "classic"))
+    cfg["domain"]          = request.form.get("domain",          cfg.get("domain", ""))
 
     record = {
         "id":           feed_id,
@@ -284,6 +287,8 @@ def add_feed():
             "border_width":    cfg["border_width"],
             "badge_position":  cfg["badge_position"],
             "badge_font_size": cfg["badge_font_size"],
+            "banner_style":    cfg["banner_style"],
+            "domain":          cfg["domain"],
         },
     }
     update_feed(feed_id, record)
@@ -306,7 +311,7 @@ def process_feed_route(feed_id):
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position"): 
+    for k in ("border_color", "badge_position", "banner_style", "domain"):
         if k in body: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
@@ -314,6 +319,7 @@ def process_feed_route(feed_id):
     update_feed(feed_id, {"status": "processing", "progress": "Запущено", "config": {
         "border_color": cfg["border_color"], "border_width": cfg["border_width"],
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
+        "banner_style": cfg["banner_style"], "domain": cfg["domain"],
     }})
     threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, None), daemon=True).start()
     return jsonify({"ok": True})
@@ -328,7 +334,7 @@ def refresh_feed(feed_id):
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position"):
+    for k in ("border_color", "badge_position", "banner_style", "domain"):
         if k in body: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
@@ -336,6 +342,7 @@ def refresh_feed(feed_id):
     update_feed(feed_id, {"status": "processing", "progress": "Завантаження оновленого фіду...", "config": {
         "border_color": cfg["border_color"], "border_width": cfg["border_width"],
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
+        "banner_style": cfg["banner_style"], "domain": cfg["domain"],
     }})
     threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, record["source_url"]), daemon=True).start()
     return jsonify({"ok": True})

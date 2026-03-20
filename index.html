@@ -289,6 +289,24 @@
   .stat-box.warn    .stat-value { color: var(--yellow); }
   .stat-label { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
+  /* Style picker grid */
+  .style-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px;
+  }
+  @media (max-width: 900px) { .style-grid { grid-template-columns: repeat(2,1fr); } }
+  .style-card {
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    cursor: pointer; transition: all var(--transition);
+    display: flex; flex-direction: column; gap: 2px;
+    background: var(--bg);
+  }
+  .style-card:hover { border-color: var(--accent); background: var(--surface2); }
+  .style-card.active { border-color: var(--accent); background: var(--surface2);
+    box-shadow: 0 0 0 2px rgba(255,59,59,.2); }
+  .style-icon { font-size: 18px; }
+  .style-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .style-desc { font-size: 11px; color: var(--muted); }
+
   /* Preview block */
   .preview-wrap {
     position: relative; border-radius: 12px; overflow: hidden;
@@ -597,9 +615,32 @@ function renderDetail(feed) {
 
     <div class="card">
       <div class="card-title">Налаштування оформлення</div>
+
+      <div class="form-group full" style="margin-bottom:16px">
+        <label>Стиль банера</label>
+        <div class="style-grid">
+          ${[
+            ['classic',  '🔲', 'Classic',  'Класична рамка + бейдж'],
+            ['neon',     '⚡', 'Neon',     'Glow-ефект + неонова смуга'],
+            ['luxury',   '✨', 'Luxury',   'Золота рамка + темна смуга'],
+            ['minimal',  '◻️', 'Minimal',  'Тонка рамка + акцентні кути'],
+            ['gradient', '🌈', 'Gradient', 'Градієнтна рамка і смуга'],
+            ['dark',     '🌑', 'Dark',     'Dark mode + яскравий акцент'],
+          ].map(([val, icon, name, desc]) => `
+            <div class="style-card ${(cfg.banner_style||'classic')===val?'active':''}"
+                 onclick="selectStyle('${val}', this)">
+              <span class="style-icon">${icon}</span>
+              <span class="style-name">${name}</span>
+              <span class="style-desc">${desc}</span>
+            </div>
+          `).join('')}
+        </div>
+        <input type="hidden" id="d-banner-style" value="${cfg.banner_style || 'classic'}">
+      </div>
+
       <div class="form-grid">
         <div class="form-group">
-          <label>Колір обводки</label>
+          <label>Колір акценту</label>
           <div class="color-row">
             <input type="color" id="d-border-color" value="${cfg.border_color || '#FF0000'}"
                    oninput="document.getElementById('d-border-color-text').value=this.value">
@@ -608,7 +649,7 @@ function renderDetail(feed) {
           </div>
         </div>
         <div class="form-group">
-          <label>Товщина обводки (px)</label>
+          <label>Товщина рамки (px)</label>
           <input type="number" id="d-border-width" value="${cfg.border_width || 18}" min="1" max="60">
         </div>
         <div class="form-group">
@@ -622,6 +663,14 @@ function renderDetail(feed) {
         <div class="form-group">
           <label>Розмір шрифту ціни (px)</label>
           <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size || 52}" min="16" max="120">
+        </div>
+        <div class="form-group full">
+          <label>Домен сайту на банері</label>
+          <input type="text" id="d-domain" value="${cfg.domain || ''}"
+                 placeholder="наприклад: myshop.com">
+          <span style="font-size:11px;color:var(--muted);margin-top:4px">
+            Якщо порожньо — домен буде взятий автоматично з URL фіду
+          </span>
         </div>
       </div>
       <div class="btn-row" style="margin-top:16px">
@@ -805,9 +854,31 @@ function showAddPanel() {
 
     <div class="card">
       <div class="card-title">Налаштування оформлення</div>
+
+      <div class="form-group full" style="margin-bottom:16px">
+        <label>Стиль банера</label>
+        <div class="style-grid">
+          ${[
+            ['classic','🔲','Classic','Класична рамка + бейдж'],
+            ['neon','⚡','Neon','Glow-ефект + неонова смуга'],
+            ['luxury','✨','Luxury','Золота рамка + темна смуга'],
+            ['minimal','◻️','Minimal','Тонка рамка + кути'],
+            ['gradient','🌈','Gradient','Градієнтна рамка'],
+            ['dark','🌑','Dark','Dark mode + акцент'],
+          ].map(([val,icon,name,desc],i) => `
+            <div class="style-card ${i===0?'active':''}" onclick="selectStyleAdd('${val}', this)">
+              <span class="style-icon">${icon}</span>
+              <span class="style-name">${name}</span>
+              <span class="style-desc">${desc}</span>
+            </div>
+          `).join('')}
+        </div>
+        <input type="hidden" id="add-banner-style" value="classic">
+      </div>
+
       <div class="form-grid">
         <div class="form-group">
-          <label>Колір обводки</label>
+          <label>Колір акценту</label>
           <div class="color-row">
             <input type="color" id="add-border-color" value="#FF0000"
                    oninput="document.getElementById('add-border-color-text').value=this.value">
@@ -816,7 +887,7 @@ function showAddPanel() {
           </div>
         </div>
         <div class="form-group">
-          <label>Товщина обводки (px)</label>
+          <label>Товщина рамки (px)</label>
           <input type="number" id="add-border-width" value="18" min="1" max="60">
         </div>
         <div class="form-group">
@@ -831,6 +902,13 @@ function showAddPanel() {
         <div class="form-group">
           <label>Розмір шрифту ціни (px)</label>
           <input type="number" id="add-badge-font-size" value="52" min="16" max="120">
+        </div>
+        <div class="form-group full">
+          <label>Домен сайту на банері</label>
+          <input type="text" id="add-domain" placeholder="наприклад: myshop.com">
+          <span style="font-size:11px;color:var(--muted);margin-top:4px">
+            Якщо порожньо — домен візьметься автоматично з URL фіду
+          </span>
         </div>
       </div>
       <div class="btn-row" style="margin-top:16px">
@@ -890,6 +968,8 @@ async function submitFeed() {
     border_width:    document.getElementById('add-border-width').value,
     badge_position:  document.getElementById('add-badge-position').value,
     badge_font_size: document.getElementById('add-badge-font-size').value,
+    banner_style:    document.getElementById('add-banner-style').value,
+    domain:          document.getElementById('add-domain').value,
   });
 
   const fd = new FormData();
@@ -957,6 +1037,21 @@ function copyPublicUrl() {
 }
 
 // ─────────────────────────────────────────────────────────
+// Style picker
+// ─────────────────────────────────────────────────────────
+function selectStyle(val, el) {
+  document.querySelectorAll('.style-card').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('d-banner-style').value = val;
+}
+
+function selectStyleAdd(val, el) {
+  document.querySelectorAll('.style-card').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('add-banner-style').value = val;
+}
+
+// ─────────────────────────────────────────────────────────
 // Reprocess (без перезавантаження з URL)
 // ─────────────────────────────────────────────────────────
 async function reprocess(id) {
@@ -965,6 +1060,8 @@ async function reprocess(id) {
     border_width:    document.getElementById('d-border-width').value,
     badge_position:  document.getElementById('d-badge-position').value,
     badge_font_size: document.getElementById('d-badge-font-size').value,
+    banner_style:    document.getElementById('d-banner-style').value,
+    domain:          document.getElementById('d-domain').value,
   };
   try {
     await api('POST', `/api/feeds/${id}/process`, body);
@@ -983,6 +1080,8 @@ async function refreshFeed(id) {
     border_width:    document.getElementById('d-border-width').value,
     badge_position:  document.getElementById('d-badge-position').value,
     badge_font_size: document.getElementById('d-badge-font-size').value,
+    banner_style:    document.getElementById('d-banner-style').value,
+    domain:          document.getElementById('d-domain').value,
   };
   try {
     await api('POST', `/api/feeds/${id}/refresh`, body);
