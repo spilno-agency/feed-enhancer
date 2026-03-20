@@ -12,9 +12,9 @@ COPY static/ static/
 
 RUN mkdir -p data/images data/feeds data/results
 
-ENV PORT=5000
-ENV BASE_URL=http://localhost:5000/images/
+ENV PORT=8080
+ENV BASE_URL=http://localhost:8080/images/
 ENV DATA_DIR=data
 
-EXPOSE 5000
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120"]
+EXPOSE 8080
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120"]
