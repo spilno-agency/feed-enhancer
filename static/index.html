@@ -466,6 +466,24 @@
   }
   .step-arrow { color: var(--border); font-size: 14px; }
 
+  /* Corner position picker */
+  .corner-picker {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 6px; width: 100px; margin-top: 4px;
+  }
+  .corner-btn {
+    width: 44px; height: 44px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--muted); font-size: 18px; cursor: pointer;
+    transition: all var(--transition);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .corner-btn:hover { border-color: var(--accent); color: var(--text); }
+  .corner-btn.active {
+    border-color: var(--accent); background: rgba(255,59,59,.12);
+    color: var(--accent); font-weight: 700;
+  }
+
   /* Style picker grid */
   .style-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px;
@@ -973,26 +991,48 @@ function renderDetail(feed) {
           </div>
           <div class="form-group">
             <label>Товщина рамки (px)</label>
-            <input type="number" id="d-border-width" value="${cfg.border_width||18}" min="1" max="60">
-          </div>
-          <div class="form-group">
-            <label>Позиція ціни</label>
-            <select id="d-badge-position">
-              ${['bottom-right','bottom-left','top-right','top-left'].map(p=>
-                `<option ${p===(cfg.badge_position||'bottom-right')?'selected':''}>${p}</option>`
-              ).join('')}
-            </select>
+            <input type="number" id="d-border-width" value="${cfg.border_width||14}" min="1" max="60">
           </div>
           <div class="form-group">
             <label>Розмір шрифту ціни (px)</label>
-            <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size||52}" min="16" max="120">
+            <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size||40}" min="16" max="120">
           </div>
+          <div class="form-group">
+            <label>Позиція ціни</label>
+            <div class="corner-picker" id="price-corner-picker">
+              ${[['top-left','↖'],['top-right','↗'],['bottom-left','↙'],['bottom-right','↘']].map(([val,arrow])=>`
+                <button type="button"
+                  class="corner-btn ${(cfg.badge_position||'bottom-right')===val?'active':''}"
+                  onclick="selectCorner('badge_position','${val}',this)"
+                  title="${val}">${arrow}</button>
+              `).join('')}
+            </div>
+            <input type="hidden" id="d-badge-position" value="${cfg.badge_position||'bottom-right'}">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Домен на банері</div>
+        <div class="form-grid">
           <div class="form-group full">
-            <label>Домен сайту на банері</label>
+            <label>Домен сайту</label>
             <input type="text" id="d-domain" value="${cfg.domain||''}" placeholder="наприклад: myshop.com">
             <span style="font-size:11px;color:var(--muted);margin-top:4px">
-              Якщо порожньо — домен береться автоматично з URL фіду
+              Якщо порожньо — береться автоматично з URL фіду
             </span>
+          </div>
+          <div class="form-group">
+            <label>Позиція домену</label>
+            <div class="corner-picker">
+              ${[['top-left','↖'],['top-right','↗'],['bottom-left','↙'],['bottom-right','↘']].map(([val,arrow])=>`
+                <button type="button"
+                  class="corner-btn ${(cfg.domain_position||'bottom-left')===val?'active':''}"
+                  onclick="selectCorner('domain_position','${val}',this)"
+                  title="${val}">${arrow}</button>
+              `).join('')}
+            </div>
+            <input type="hidden" id="d-domain-position" value="${cfg.domain_position||'bottom-left'}">
           </div>
         </div>
       </div>
@@ -1005,20 +1045,17 @@ function renderDetail(feed) {
         </p>
 
         <div id="preview-wrap" class="preview-wrap">
-          ${isDone
-            ? `<div class="preview-empty"><span class="icon">🖼</span>Натисни кнопку для оновлення превʼю</div>`
-            : `<div class="preview-empty"><span class="icon">🎨</span>Превʼю ще не згенеровано</div>`
-          }
+          <div class="preview-empty"><span class="icon">🎨</span>Натисни кнопку щоб згенерувати превʼю</div>
         </div>
 
         <div class="btn-row" style="margin-top:14px">
           <button class="btn btn-secondary" id="btn-preview-one"
                   onclick="previewOne('${feed.id}')">
-            👁 Обробити 1 товар для превʼю
+            👁 Згенерувати превʼю
           </button>
           ${isDone ? `
           <button class="btn btn-ghost btn-sm" onclick="loadPreview('${feed.id}')">
-            🔀 Інший банер із готових
+            🔀 Інший з готових
           </button>` : ''}
           <span id="preview-counter" style="font-size:12px;color:var(--muted);align-self:center"></span>
         </div>
@@ -1245,6 +1282,8 @@ function startPolling(id) {
       if (activeFeedId === id) {
         if (activeDetailTab === 'logs') {
           updateLogContainer(feeds[idx]);
+        } else if (activeDetailTab === 'design') {
+          // НЕ перемальовуємо design — це скине превʼю зображення
         } else {
           renderDetail(feeds[idx]);
         }
@@ -1533,6 +1572,7 @@ async function previewOne(id) {
     badge_font_size: document.getElementById('d-badge-font-size')?.value,
     banner_style:    document.getElementById('d-banner-style')?.value,
     domain:          document.getElementById('d-domain')?.value,
+    domain_position: document.getElementById('d-domain-position')?.value || 'bottom-left',
   };
 
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Завантаження...'; }
@@ -1600,6 +1640,15 @@ async function clearLogs(id) {
 // ─────────────────────────────────────────────────────────
 // Style picker
 // ─────────────────────────────────────────────────────────
+function selectCorner(field, val, el) {
+  el.closest('.corner-picker').querySelectorAll('.corner-btn')
+    .forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  const map = { 'badge_position': 'd-badge-position', 'domain_position': 'd-domain-position' };
+  const inp = document.getElementById(map[field]);
+  if (inp) inp.value = val;
+}
+
 function selectStyle(val, el) {
   document.querySelectorAll('.style-card').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
@@ -1623,6 +1672,7 @@ async function reprocess(id) {
     badge_font_size: document.getElementById('d-badge-font-size').value,
     banner_style:    document.getElementById('d-banner-style').value,
     domain:          document.getElementById('d-domain').value,
+    domain_position: document.getElementById('d-domain-position')?.value || 'bottom-left',
   };
   try {
     await api('POST', `/api/feeds/${id}/process`, body);
@@ -1643,6 +1693,7 @@ async function refreshFeed(id) {
     badge_font_size: document.getElementById('d-badge-font-size').value,
     banner_style:    document.getElementById('d-banner-style').value,
     domain:          document.getElementById('d-domain').value,
+    domain_position: document.getElementById('d-domain-position')?.value || 'bottom-left',
   };
   try {
     await api('POST', `/api/feeds/${id}/refresh`, body);

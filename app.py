@@ -329,6 +329,7 @@ def add_feed():
     cfg["badge_font_size"] = int(request.form.get("badge_font_size", cfg["badge_font_size"]))
     cfg["banner_style"]    = request.form.get("banner_style",    cfg.get("banner_style", "classic"))
     cfg["domain"]          = request.form.get("domain",          cfg.get("domain", ""))
+    cfg["domain_position"] = request.form.get("domain_position", cfg.get("domain_position", "bottom-left"))
 
     record = {
         "id":           feed_id,
@@ -351,6 +352,7 @@ def add_feed():
             "badge_font_size": cfg["badge_font_size"],
             "banner_style":    cfg["banner_style"],
             "domain":          cfg["domain"],
+            "domain_position": cfg["domain_position"],
         },
     }
     update_feed(feed_id, record)
@@ -375,7 +377,7 @@ def process_feed_route(feed_id):
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position", "banner_style", "domain"):
+    for k in ("border_color", "badge_position", "banner_style", "domain", "domain_position"):
         if k in body: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
@@ -413,7 +415,7 @@ def refresh_feed(feed_id):
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position", "banner_style", "domain"):
+    for k in ("border_color", "badge_position", "banner_style", "domain", "domain_position"):
         if k in body: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
@@ -547,7 +549,7 @@ def preview_one(feed_id):
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position", "banner_style", "domain"):
+    for k in ("border_color", "badge_position", "banner_style", "domain", "domain_position"):
         if k in body and body[k]: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body and body[k]: cfg[k] = int(body[k])

@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "badge_font_size": 40,
     "badge_position":  "bottom-right",
     "domain":          "",
+    "domain_position": "bottom-left",  # top-left | top-right | bottom-left | bottom-right
     "output_size":     (600, 600),   # 600px — мінімум для Google/Meta, ~4x менше RAM ніж 1200px
     "output_quality":  82,
     "output_dir":      "enhanced_images",
@@ -165,15 +166,42 @@ def download_image(url: str, cfg: dict):
     return None
 
 
+def _get_corner_xy(pos: str, W: int, H: int, w: int, h: int, margin: int) -> tuple:
+    """Повертає (x, y) для елемента розміром w×h у заданому куті."""
+    if pos == "top-left":     return margin, margin
+    if pos == "top-right":    return W - w - margin, margin
+    if pos == "bottom-left":  return margin, H - h - margin
+    return W - w - margin, H - h - margin  # bottom-right за замовчуванням
+
+
+def draw_domain(draw: ImageDraw.ImageDraw, img: Image.Image,
+                domain: str, cfg: dict, bg_color: tuple) -> None:
+    """Малює бейдж домену у заданому куті (domain_position)."""
+    if not domain:
+        return
+    W, H = img.size
+    bw   = int(cfg.get("border_width", 14))
+    pos  = safe_str(cfg.get("domain_position", "bottom-left"))
+    font = get_font_regular(22)
+    db   = draw.textbbox((0, 0), domain, font=font)
+    dw, dh = db[2]-db[0], db[3]-db[1]
+    px, py  = 12, 6
+    margin  = bw + 8
+    x, y    = _get_corner_xy(pos, W, H, dw + px*2, dh + py*2, margin)
+    draw.rounded_rectangle([x, y, x+dw+px*2, y+dh+py*2],
+                            radius=8, fill=(*bg_color[:3], 200))
+    draw.text((x+px-db[0], y+py-db[1]), domain, font=font, fill=(255,255,255,255))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # СТИЛІ БАНЕРІВ
 # ═════════════════════════════════════════════════════════════════════════════
 
 def style_classic(img: Image.Image, price: str, domain: str, cfg: dict) -> Image.Image:
-    """Класика: кольорова рамка + заокруглений бейдж ціни + домен знизу."""
-    draw = ImageDraw.Draw(img)
-    W, H = img.size
-    bw   = int(cfg.get("border_width", 18))
+    """Класика: кольорова рамка + заокруглений бейдж ціни + домен у своєму куті."""
+    draw  = ImageDraw.Draw(img)
+    W, H  = img.size
+    bw    = int(cfg.get("border_width", 14))
     color = safe_str(cfg.get("border_color", "#FF0000"))
     rgba  = hex_to_rgba(color)
 
@@ -183,31 +211,19 @@ def style_classic(img: Image.Image, price: str, domain: str, cfg: dict) -> Image
 
     # Бейдж ціни
     if price:
-        font  = get_font(int(cfg.get("badge_font_size", 52)))
+        font  = get_font(int(cfg.get("badge_font_size", 40)))
         bbox  = draw.textbbox((0,0), price, font=font)
         tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
-        px, py = 28, 14
+        px, py = 22, 10
         bw2, bh = tw+px*2, th+py*2
-        margin = bw + 10
-        pos = safe_str(cfg.get("badge_position","bottom-right"))
-        if pos == "bottom-right":  x,y = W-bw2-margin, H-bh-margin
-        elif pos == "bottom-left": x,y = margin, H-bh-margin
-        elif pos == "top-right":   x,y = W-bw2-margin, margin
-        else:                      x,y = margin, margin
-        draw.rounded_rectangle([x,y,x+bw2,y+bh], radius=14, fill=hex_to_rgba(color,230))
+        margin  = bw + 10
+        pos     = safe_str(cfg.get("badge_position", "bottom-right"))
+        x, y    = _get_corner_xy(pos, W, H, bw2, bh, margin)
+        draw.rounded_rectangle([x,y,x+bw2,y+bh], radius=12, fill=hex_to_rgba(color, 230))
         draw.text((x+px-bbox[0], y+py-bbox[1]), price, font=font, fill=(255,255,255,255))
 
-    # Домен
-    if domain:
-        df = get_font_regular(28)
-        db = draw.textbbox((0,0), domain, font=df)
-        dw = db[2]-db[0]
-        dx = (W - dw) // 2
-        dy = H - bw - 36
-        draw.rectangle([dx-10, dy-4, dx+dw+10, dy+(db[3]-db[1])+4],
-                        fill=hex_to_rgba(color, 180))
-        draw.text((dx-db[0], dy-db[1]), domain, font=df, fill=(255,255,255,255))
-
+    # Домен у своєму куті
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
@@ -240,15 +256,7 @@ def style_neon(img: Image.Image, price: str, domain: str, cfg: dict) -> Image.Im
         draw.text((tx+2-bbox[0], ty+2-bbox[1]), price, font=font, fill=(0,0,0,160))
         draw.text((tx-bbox[0], ty-bbox[1]), price, font=font, fill=(255,255,255,255))
 
-    if domain:
-        df   = get_font_regular(26)
-        db   = draw.textbbox((0,0), domain, font=df)
-        dw   = db[2]-db[0]
-        dx   = W - dw - bw - 14
-        dy   = bw + 10
-        draw.text((dx-db[0]+1, dy-db[1]+1), domain, font=df, fill=(*rgba[:3], 180))
-        draw.text((dx-db[0], dy-db[1]), domain, font=df, fill=(255,255,255,230))
-
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
@@ -292,17 +300,7 @@ def style_luxury(img: Image.Image, price: str, domain: str, cfg: dict) -> Image.
         # Золотий текст
         draw.text((tx-bbox[0], ty-bbox[1]), price, font=font, fill=gold)
 
-    # Домен — угорі зліва, стильно
-    if domain:
-        df  = get_font_regular(24)
-        db  = draw.textbbox((0,0), domain, font=df)
-        px2 = 16
-        dw2 = db[2]-db[0]
-        # Темний фон
-        draw.rectangle([bw+offset, bw+offset, bw+offset+dw2+px2*2, bw+offset+(db[3]-db[1])+12],
-                        fill=(0,0,0,160))
-        draw.text((bw+offset+px2-db[0], bw+offset+6-db[1]), domain, font=df, fill=gold)
-
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
@@ -346,15 +344,7 @@ def style_minimal(img: Image.Image, price: str, domain: str, cfg: dict) -> Image
         draw.rounded_rectangle([x+2,y+2,x+bw2-2,y+bh-2], radius=6, outline=(255,255,255,120), width=1)
         draw.text((x+px-bbox[0], y+py-bbox[1]), price, font=font, fill=(255,255,255,255))
 
-    if domain:
-        df  = get_font_regular(24)
-        db  = draw.textbbox((0,0), domain, font=df)
-        dw2 = db[2]-db[0]
-        dx  = (W - dw2) // 2
-        dy  = H - bw - 34
-        draw.text((dx-db[0]+1, dy-db[1]+1), domain, font=df, fill=(0,0,0,100))
-        draw.text((dx-db[0], dy-db[1]), domain, font=df, fill=(*rgba[:3], 220))
-
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
@@ -391,18 +381,7 @@ def style_gradient(img: Image.Image, price: str, domain: str, cfg: dict) -> Imag
         draw.text((tx-bbox[0]+2, ty-bbox[1]+2), price, font=font, fill=(0,0,0,100))
         draw.text((tx-bbox[0], ty-bbox[1]), price, font=font, fill=(255,255,255,255))
 
-    if domain:
-        df  = get_font_regular(26)
-        db  = draw.textbbox((0,0), domain, font=df)
-        dw2 = db[2]-db[0]
-        dx  = W - dw2 - bw - 16
-        dy  = bw + 12
-        # Pill-форма фону
-        ph  = db[3]-db[1]+12
-        draw.rounded_rectangle([dx-12, dy-6, dx+dw2+12, dy+ph-6],
-                                radius=ph//2, fill=(*rgba[:3], 200))
-        draw.text((dx-db[0], dy-db[1]), domain, font=df, fill=(255,255,255,255))
-
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
@@ -451,15 +430,7 @@ def style_dark(img: Image.Image, price: str, domain: str, cfg: dict) -> Image.Im
         ty = H - strip_h + (strip_h - (bbox[3]-bbox[1])) // 2
         draw.text((tx-bbox[0], ty-bbox[1]), price, font=font, fill=(*rgba[:3], 255))
 
-    if domain:
-        df  = get_font_regular(24)
-        db  = draw.textbbox((0,0), domain, font=df)
-        dw2 = db[2]-db[0]
-        dx  = bw + 16
-        dy  = bw + 14
-        draw.rectangle([dx-8, dy-4, dx+dw2+8, dy+(db[3]-db[1])+4], fill=(10,10,10,200))
-        draw.text((dx-db[0], dy-db[1]), domain, font=df, fill=(*rgba[:3], 255))
-
+    draw_domain(draw, img, domain, cfg, rgba)
     return img
 
 
