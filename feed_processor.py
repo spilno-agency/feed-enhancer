@@ -130,7 +130,7 @@ def get_font_regular(size: int):
     return font
 
 def download_image(url: str, cfg: dict):
-    """Завантажує зображення і одразу масштабує до output_size — мінімум пам'яті."""
+    """Завантажує зображення і одразу масштабує до output_size."""
     if not url or not url.startswith("http"): return None
     target_size = cfg.get("output_size", (800, 800))
     for attempt in range(1, cfg["retry_count"] + 1):
@@ -142,17 +142,23 @@ def download_image(url: str, cfg: dict):
                 buf.write(chunk)
             resp.close()
             buf.seek(0)
-            # Відкриваємо як RGB одразу (3 канали замість 4 — 25% економії)
-            img = Image.open(buf)
-            img.load()  # примусово завантажуємо пікселі
-            buf.close()
-            # Одразу масштабуємо до потрібного розміру
-            # (не тримаємо оригінал 3000×3000 в пам'яті разом з результатом)
-            if img.size != tuple(target_size):
-                img = img.resize(target_size, Image.LANCZOS)
-            # Конвертуємо в RGBA для малювання
+
+            # Відкриваємо і одразу копіюємо пікселі в пам'ять
+            # НЕ закриваємо buf до повного завантаження
+            raw = Image.open(buf)
+            raw.load()  # примусово читаємо всі пікселі поки buf відкритий
+
+            # Тепер можна безпечно масштабувати і конвертувати
+            if raw.size != tuple(target_size):
+                img = raw.resize(target_size, Image.LANCZOS)
+                raw.close()
+            else:
+                img = raw
+
             img = img.convert("RGBA")
+            buf.close()  # тепер безпечно закривати — пікселі вже в img
             return img
+
         except Exception as e:
             log.warning(f"Спроба {attempt} — {url}: {e}")
             if attempt < cfg["retry_count"]: time.sleep(cfg["retry_delay"])

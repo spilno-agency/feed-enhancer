@@ -444,6 +444,28 @@
     min-width: 60px; text-align: right;
   }
 
+  /* Steps navigation */
+  .steps-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0 18px; flex-wrap: wrap; gap: 10px;
+  }
+  .step-back {
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font-size: 13px; padding: 6px 14px;
+    cursor: pointer; transition: all var(--transition);
+  }
+  .step-back:hover { color: var(--text); border-color: var(--text); }
+  .steps-indicator {
+    display: flex; align-items: center; gap: 6px; font-size: 12px;
+  }
+  .step { color: var(--muted); padding: 4px 10px; border-radius: 6px; }
+  .step.done { color: #4ade80; }
+  .step.active {
+    color: var(--text); background: var(--surface2);
+    font-weight: 700; border: 1px solid var(--border);
+  }
+  .step-arrow { color: var(--border); font-size: 14px; }
+
   /* Style picker grid */
   .style-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px;
@@ -731,10 +753,24 @@ async function loadFeeds() {
 // Select feed → show detail
 // ─────────────────────────────────────────────────────────
 function selectFeed(id) {
+  const isNewFeed = activeFeedId !== id; // чи вибираємо інший фід
   activeFeedId = id;
   renderList();
   const feed = feeds.find(f => f.id === id);
-  if (feed) renderDetail(feed);
+  if (!feed) return;
+
+  // Визначаємо вкладку тільки якщо це новий фід (не поточний)
+  if (isNewFeed) {
+    if (feed.status === 'processing') {
+      activeDetailTab = 'logs';    // іде обробка → логи
+    } else if (feed.status === 'done') {
+      activeDetailTab = 'info';    // готовий → інфо зі статистикою і URL
+    } else {
+      activeDetailTab = 'info';    // новий/помилка → інфо
+    }
+  }
+
+  renderDetail(feed);
 }
 
 let activeDetailTab = 'info';
@@ -770,6 +806,17 @@ function renderDetail(feed) {
 
     <!-- ══════════════ ВКЛАДКА 1: НАЛАШТУВАННЯ ФІДУ ══════════════ -->
     <div id="tab-info" class="detail-tab-pane ${activeDetailTab==='info'?'active':''}">
+
+      <!-- Індикатор кроків -->
+      <div class="steps-nav" style="justify-content:flex-end">
+        <div class="steps-indicator">
+          <span class="step active">1. Фід</span>
+          <span class="step-arrow">›</span>
+          <span class="step">2. Оформлення</span>
+          <span class="step-arrow">›</span>
+          <span class="step">3. Генерація</span>
+        </div>
+      </div>
 
       <div class="card">
         <div class="card-title">Інформація про фід</div>
@@ -853,11 +900,14 @@ function renderDetail(feed) {
         ${sched.last_run ? `<p style="font-size:12px;color:var(--muted);margin-top:6px">Останнє: ${formatDate(sched.last_run)}</p>` : ''}
       </div>` : ''}
 
-      <div class="card">
-        <div class="card-title">Дії</div>
-        <div class="btn-row">
+      <div class="card" style="border:1px solid rgba(129,140,248,.3);background:rgba(129,140,248,.04)">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+          <div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px">Крок 2 — Налаштування оформлення</div>
+            <div style="font-size:13px;color:var(--muted)">Оберіть стиль банерів, колір, домен і зробіть превʼю</div>
+          </div>
           <button class="btn btn-primary" onclick="switchDetailTab('design','${feed.id}')">
-            🎨 Налаштувати зовнішній вигляд →
+            🎨 Налаштувати вигляд →
           </button>
         </div>
       </div>
@@ -872,6 +922,20 @@ function renderDetail(feed) {
 
     <!-- ══════════════ ВКЛАДКА 2: ЗОВНІШНІЙ ВИГЛЯД ══════════════ -->
     <div id="tab-design" class="detail-tab-pane ${activeDetailTab==='design'?'active':''}">
+
+      <!-- Навігація кроків -->
+      <div class="steps-nav">
+        <button class="step-back" onclick="switchDetailTab('info','${feed.id}')">
+          ← Назад до фіду
+        </button>
+        <div class="steps-indicator">
+          <span class="step done">1. Фід</span>
+          <span class="step-arrow">›</span>
+          <span class="step active">2. Оформлення</span>
+          <span class="step-arrow">›</span>
+          <span class="step">3. Генерація</span>
+        </div>
+      </div>
 
       <div class="card">
         <div class="card-title">Стиль банера</div>
@@ -962,21 +1026,28 @@ function renderDetail(feed) {
 
       <!-- Запуск повної генерації -->
       <div class="card" style="border:1px solid rgba(129,140,248,.3);background:rgba(129,140,248,.04)">
+        <div class="steps-indicator" style="margin-bottom:12px">
+          <span class="step done">1. Фід ✓</span>
+          <span class="step-arrow">›</span>
+          <span class="step done">2. Оформлення ✓</span>
+          <span class="step-arrow">›</span>
+          <span class="step active">3. Генерація</span>
+        </div>
         <div class="card-title" style="color:#818cf8">Запустити генерацію фіду</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
-          Після підтвердження налаштувань — запустіть повну обробку всіх товарів.
-          Під час генерації редагування недоступне.
+          Після запуску всі товари будуть оброблені з поточними налаштуваннями.
+          Відкриється вкладка Генерація де можна стежити за прогресом або зупинити.
         </p>
         <div class="btn-row">
           ${isUrl
             ? `<button class="btn btn-primary" onclick="refreshFeed('${feed.id}')">
-                 🚀 Оновити з URL і обробити весь фід
+                 🚀 Оновити з URL і запустити генерацію
                </button>
                <button class="btn btn-secondary" onclick="reprocess('${feed.id}')">
-                 ▶ Обробити без оновлення
+                 ▶ Генерувати без оновлення XML
                </button>`
             : `<button class="btn btn-primary" onclick="reprocess('${feed.id}')">
-                 🚀 Обробити весь фід
+                 🚀 Запустити генерацію фіду
                </button>`
           }
         </div>
@@ -1130,12 +1201,10 @@ async function loadPreview(feedId) {
 // ─────────────────────────────────────────────────────────
 function startPolling(id) {
   stopPolling();
-  // Автоматично переходимо на вкладку логів коли починається обробка
-  if (activeDetailTab !== 'logs') {
-    activeDetailTab = 'logs';
-    const feed = feeds.find(f => f.id === id);
-    if (feed) renderDetail(feed);
-  }
+  // Переходимо на вкладку логів при старті обробки
+  activeDetailTab = 'logs';
+  const feed = feeds.find(f => f.id === id);
+  if (feed) renderDetail(feed);
   pollTimer = setInterval(async () => {
     try {
       const s = await api('GET', `/api/feeds/${id}/status`);
@@ -1264,7 +1333,10 @@ function showAddPanel() {
   const right = document.getElementById('panel-right');
   right.innerHTML = `
     <div class="card">
-      <div class="card-title">Додати новий фід</div>
+      <div class="card-title" style="margin-bottom:4px">Крок 1 з 2 — Додати джерело фіду</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:20px">
+        Вкажіть XML файл або URL фіду. Після цього перейдете до налаштування оформлення банерів.
+      </p>
 
       <!-- Таби: Файл / URL -->
       <div class="tab-row">
@@ -1310,69 +1382,11 @@ function showAddPanel() {
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="card-title">Налаштування оформлення</div>
-
-      <div class="form-group full" style="margin-bottom:16px">
-        <label>Стиль банера</label>
-        <div class="style-grid">
-          ${[
-            ['classic','🔲','Classic','Класична рамка + бейдж'],
-            ['neon','⚡','Neon','Glow-ефект + неонова смуга'],
-            ['luxury','✨','Luxury','Золота рамка + темна смуга'],
-            ['minimal','◻️','Minimal','Тонка рамка + кути'],
-            ['gradient','🌈','Gradient','Градієнтна рамка'],
-            ['dark','🌑','Dark','Dark mode + акцент'],
-          ].map(([val,icon,name,desc],i) => `
-            <div class="style-card ${i===0?'active':''}" onclick="selectStyleAdd('${val}', this)">
-              <span class="style-icon">${icon}</span>
-              <span class="style-name">${name}</span>
-              <span class="style-desc">${desc}</span>
-            </div>
-          `).join('')}
-        </div>
-        <input type="hidden" id="add-banner-style" value="classic">
-      </div>
-
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Колір акценту</label>
-          <div class="color-row">
-            <input type="color" id="add-border-color" value="#FF0000"
-                   oninput="document.getElementById('add-border-color-text').value=this.value">
-            <input type="text" id="add-border-color-text" value="#FF0000" maxlength="7"
-                   oninput="document.getElementById('add-border-color').value=this.value">
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Товщина рамки (px)</label>
-          <input type="number" id="add-border-width" value="18" min="1" max="60">
-        </div>
-        <div class="form-group">
-          <label>Позиція ціни</label>
-          <select id="add-badge-position">
-            <option>bottom-right</option>
-            <option>bottom-left</option>
-            <option>top-right</option>
-            <option>top-left</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Розмір шрифту ціни (px)</label>
-          <input type="number" id="add-badge-font-size" value="52" min="16" max="120">
-        </div>
-        <div class="form-group full">
-          <label>Домен сайту на банері</label>
-          <input type="text" id="add-domain" placeholder="наприклад: myshop.com">
-          <span style="font-size:11px;color:var(--muted);margin-top:4px">
-            Якщо порожньо — домен візьметься автоматично з URL фіду
-          </span>
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:16px">
-        <button class="btn btn-primary" id="submit-btn" onclick="submitFeed()">⬆ Додати та обробити</button>
+      <div class="btn-row" style="margin-top:20px">
+        <button class="btn btn-primary" id="submit-btn" onclick="submitFeed()">
+          Далі: Налаштування оформлення →
+        </button>
         <button class="btn btn-ghost" onclick="loadFeeds();">Скасувати</button>
       </div>
     </div>
@@ -1380,13 +1394,15 @@ function showAddPanel() {
 
   // Drag & drop
   const zone = document.getElementById('upload-zone');
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
-  zone.addEventListener('drop', e => {
-    e.preventDefault(); zone.classList.remove('drag');
-    const f = e.dataTransfer.files[0];
-    if (f) { document.getElementById('add-file').files = e.dataTransfer.files; onFileChange({ files: [f] }); }
-  });
+  if (zone) {
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault(); zone.classList.remove('drag');
+      const f = e.dataTransfer.files[0];
+      if (f) { document.getElementById('add-file').files = e.dataTransfer.files; onFileChange({ files: [f] }); }
+    });
+  }
 }
 
 // Перемикання табів
@@ -1423,18 +1439,8 @@ function onFileChange(input) {
 async function submitFeed() {
   const btn = document.getElementById('submit-btn');
 
-  const sharedCfg = () => ({
-    border_color:    document.getElementById('add-border-color').value,
-    border_width:    document.getElementById('add-border-width').value,
-    badge_position:  document.getElementById('add-badge-position').value,
-    badge_font_size: document.getElementById('add-badge-font-size').value,
-    banner_style:    document.getElementById('add-banner-style').value,
-    domain:          document.getElementById('add-domain').value,
-  });
-
   const fd = new FormData();
-  Object.entries(sharedCfg()).forEach(([k, v]) => fd.append(k, v));
-  fd.append('auto_process', 'true');
+  fd.append('auto_process', 'false'); // НЕ запускаємо обробку одразу
 
   // ── Режим URL ──
   if (activeTab === 'url') {
@@ -1453,18 +1459,21 @@ async function submitFeed() {
     fd.append('name', document.getElementById('add-name').value || fileInput.files[0].name);
   }
 
-  btn.disabled = true; btn.textContent = 'Завантаження...';
+  btn.disabled = true; btn.textContent = '⏳ Завантаження...';
 
   try {
     const feed = await api('POST', '/api/feeds', fd);
     feeds.unshift(feed);
-    toast('✅ Фід додано, починаємо обробку...');
-    selectFeed(feed.id);
+    toast('✅ Фід додано! Налаштуйте оформлення і запустіть генерацію.');
+    // Відкриваємо фід одразу на вкладці "Зовнішній вигляд"
+    activeFeedId = feed.id;
+    activeDetailTab = 'design';
     await loadFeeds();
-    startPolling(feed.id);
+    renderDetail(feeds.find(f => f.id === feed.id));
   } catch(e) {
     toast(e.message, 'error');
-    btn.disabled = false; btn.textContent = '⬆ Додати та обробити';
+    btn.disabled = false;
+    btn.textContent = 'Далі: Налаштування оформлення →';
   }
 }
 
