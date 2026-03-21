@@ -319,8 +319,13 @@ def stop_feed(feed_id):
 
 @app.route("/api/feeds/<feed_id>/preview-one", methods=["POST"])
 def preview_one(feed_id):
-    import gc
-    record = get_feed(feed_id)
+    import gc, time as _time
+    # Retry до 3 разів — фід може ще не зʼявитись в GCS одразу після створення
+    record = None
+    for _ in range(3):
+        record = get_feed(feed_id)
+        if record: break
+        _time.sleep(0.5)
     if not record: return jsonify({"error": "Фід не знайдено"}), 404
     if record.get("status") == "processing":
         return jsonify({"error": "Фід обробляється"}), 409
