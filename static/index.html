@@ -583,9 +583,9 @@
   .last-fetched { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
   @media (max-width: 768px) {
-    main { grid-template-columns: 1fr; }
-    .panel-left { height: auto; max-height: 40vh; }
-    .panel-right { padding: 20px; }
+    main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: calc(100vh - 60px); }
+    .panel-left { height: auto; max-height: 35vh; overflow-y: auto; }
+    .panel-right { padding: 20px; min-height: 60vh; }
     .form-grid { grid-template-columns: 1fr; }
   }
 </style>
@@ -1504,15 +1504,18 @@ async function submitFeed() {
 
   try {
     const feed = await api('POST', '/api/feeds', fd);
-    feeds.unshift(feed);
-    toast('✅ Фід додано! Налаштуйте оформлення і запустіть генерацію.');
-    // Відкриваємо фід одразу на вкладці "Зовнішній вигляд"
+    // Одразу показуємо detail без чекання loadFeeds
     activeFeedId = feed.id;
     activeDetailTab = 'design';
-    await loadFeeds();
-    renderDetail(feeds.find(f => f.id === feed.id));
+    feeds.unshift(feed);
+    renderList();
+    renderDetail(feed);
+    toast('✅ Фід додано!');
+    // Оновлюємо список у фоні
+    loadFeeds().catch(e => console.warn('loadFeeds error:', e));
   } catch(e) {
-    toast(e.message, 'error');
+    console.error('submitFeed error:', e);
+    toast('Помилка: ' + e.message, 'error');
     btn.disabled = false;
     btn.textContent = 'Далі: Налаштування оформлення →';
   }
@@ -1742,4 +1745,4 @@ setInterval(loadFeeds, 10000); // оновлюємо список кожні 10�
 </script>
 </body>
 </html>
-Сб 21 бер. 2026 18:50:25 EET
+Сб 21 бер. 2026 19:03:16 EET
