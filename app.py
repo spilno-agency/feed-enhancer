@@ -130,21 +130,35 @@ def run_processing(feed_id, input_path, cfg, source_url=None):
                 "progress_success": success,
                 "progress_skipped": skipped,
             })
+            # Перевіряємо чи користувач запросив зупинку
+            record = get_feed(feed_id)
+            if record and record.get("stop_requested"):
+                return True  # сигнал зупинки
+            return False
 
         stats = process_feed(input_path, cfg, progress_callback=on_progress)
+
+        # Перевіряємо чи зупинено
+        final_record = get_feed(feed_id)
+        was_stopped  = final_record and final_record.get("stop_requested")
 
         update_feed(feed_id, {
             "status":           "done",
             "result_path":      output_path,
-            "progress":         f"Готово: оброблено {stats['success']} з {stats['total']}",
+            "progress":         f"{'Зупинено' if was_stopped else 'Готово'}: оброблено {stats['success']} з {stats['total']}",
             "progress_current": stats["success"],
             "progress_total":   stats["total"],
             "finished_at":      datetime.now().isoformat(),
             "stats":            stats,
             "public_url":       public_feed_url(feed_id),
+            "stop_requested":   False,
         })
-        log_event(feed_id, "success",
-            f"Обробку завершено: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']} товарів")
+        if was_stopped:
+            log_event(feed_id, "warning",
+                f"Генерацію зупинено користувачем: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']}")
+        else:
+            log_event(feed_id, "success",
+                f"Обробку завершено: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']} товарів")
 
     except Exception as e:
         update_feed(feed_id, {"status": "error", "progress": str(e)})
@@ -495,6 +509,81 @@ def delete_feed(feed_id):
             Path(p).unlink(missing_ok=True)
     delete_feed_from_db(feed_id)
     return jsonify({"ok": True})
+
+@app.route("/api/feeds/<feed_id>/stop", methods=["POST"])
+def stop_feed(feed_id):
+    """Зупиняє обробку фіду встановлюючи прапор зупинки."""
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Фід не знайдено"}), 404
+    if record.get("status") != "processing":
+        return jsonify({"error": "Фід не обробляється"}), 409
+    update_feed(feed_id, {"stop_requested": True})
+    log_event(feed_id, "warning", "Зупинка генерації запрошена користувачем")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/feeds/<feed_id>/preview-one", methods=["POST"])
+def preview_one(feed_id):
+    """Обробляє один випадковий товар з фіду для превʼю."""
+    import random, xml.etree.ElementTree as ET2
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Фід не знайдено"}), 404
+    if record.get("status") == "processing":
+        return jsonify({"error": "Фід зараз обробляється"}), 409
+
+    input_path = record.get("input_path")
+    if not input_path or not Path(input_path).exists():
+        return jsonify({"error": "Вихідний XML файл не знайдено"}), 404
+
+    body = request.get_json(silent=True) or {}
+    cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
+    for k in ("border_color", "badge_position", "banner_style", "domain"):
+        if k in body and body[k]: cfg[k] = body[k]
+    for k in ("border_width", "badge_font_size"):
+        if k in body and body[k]: cfg[k] = int(body[k])
+
+    cfg["output_dir"] = str(IMAGES_DIR)
+    cfg["base_url"]   = BASE_URL
+
+    try:
+        from feed_processor import parse_feed, extract_item_data, download_image, enhance_image, save_image, safe_str
+        _, items = parse_feed(input_path)
+        if not items:
+            return jsonify({"error": "Товари не знайдено у фіді"}), 404
+
+        # Вибираємо випадковий товар
+        import hashlib
+        for _ in range(10):
+            item = random.choice(items)
+            data    = extract_item_data(item)
+            img_url = safe_str(data.get("image_link",""))
+            price   = safe_str(data.get("price",""))
+            raw_id  = safe_str(data.get("id",""))
+            if img_url: break
+
+        if not img_url:
+            return jsonify({"error": "Не вдалося знайти товар із зображенням"}), 404
+
+        item_id = raw_id or hashlib.md5(img_url.encode()).hexdigest()[:8]
+        filename = f"preview_{feed_id}_{item_id}.jpg"
+
+        img = download_image(img_url, cfg)
+        if img is None:
+            return jsonify({"error": "Не вдалося завантажити зображення"}), 502
+
+        enhanced = enhance_image(img, price, cfg)
+        img.close()
+        save_image(enhanced, filename, cfg)
+        enhanced.close()
+
+        import gc; gc.collect()
+
+        image_url = f"{BASE_URL.rstrip('/')}/{filename}" if BASE_URL else f"/images/{filename}"
+        log_event(feed_id, "info", f"Превʼю згенеровано для товару ID={item_id}, стиль={cfg.get('banner_style','classic')}")
+        return jsonify({"image_url": image_url, "item_id": item_id})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/")
 def index():

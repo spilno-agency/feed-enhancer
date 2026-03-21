@@ -318,6 +318,17 @@
     border-radius: 10px; padding: 1px 6px; font-weight: 700;
     min-width: 18px; text-align: center;
   }
+  .detail-tab.tab-disabled {
+    opacity: .4; cursor: not-allowed;
+  }
+  .detail-tab.tab-disabled:hover { background: transparent; color: var(--muted); }
+  .log-live-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; color: #4ade80;
+    background: rgba(74,222,128,.12); border-radius: 8px;
+    padding: 1px 6px; margin-left: 2px;
+  }
+
   .detail-tab-pane { display: none; }
   .detail-tab-pane.active { display: block; }
 
@@ -726,41 +737,46 @@ function selectFeed(id) {
   if (feed) renderDetail(feed);
 }
 
-let activeDetailTab = 'settings';
+let activeDetailTab = 'info';
 
 function renderDetail(feed) {
   if (!feed) return;
-  const cfg   = feed.config   || {};
-  const sched = feed.schedule || {};
-  const right = document.getElementById('panel-right');
-  const isUrl = feed.source_type === 'url';
-  const logs  = feed.logs || [];
+  const cfg        = feed.config   || {};
+  const sched      = feed.schedule || {};
+  const right      = document.getElementById('panel-right');
+  const isUrl      = feed.source_type === 'url';
+  const logs       = feed.logs || [];
+  const isProc     = feed.status === 'processing';
+  const isDone     = feed.status === 'done';
 
   right.innerHTML = `
-    <!-- ── Вкладки ── -->
+    <!-- ══ ВКЛАДКИ ══ -->
     <div class="detail-tabs">
-      <button class="detail-tab ${activeDetailTab==='settings'?'active':''}"
-              onclick="switchDetailTab('settings','${feed.id}')">
-        ⚙️ Налаштування фіду
+      <button class="detail-tab ${activeDetailTab==='info'?'active':''} ${isProc?'tab-disabled':''}"
+              onclick="${isProc ? 'tabBlockedToast()' : `switchDetailTab('info','${feed.id}')`}">
+        📄 Налаштування фіду
+      </button>
+      <button class="detail-tab ${activeDetailTab==='design'?'active':''} ${isProc?'tab-disabled':''}"
+              onclick="${isProc ? 'tabBlockedToast()' : `switchDetailTab('design','${feed.id}')`}">
+        🎨 Зовнішній вигляд
       </button>
       <button class="detail-tab ${activeDetailTab==='logs'?'active':''}"
               onclick="switchDetailTab('logs','${feed.id}')">
-        📋 Логування
+        📋 Генерація
         ${logs.length ? `<span class="log-badge">${logs.length}</span>` : ''}
+        ${isProc ? `<span class="log-live-pill"><span class="log-live-dot"></span>live</span>` : ''}
       </button>
     </div>
 
-    <!-- ══════════════════ ВКЛАДКА: НАЛАШТУВАННЯ ══════════════════ -->
-    <div id="tab-settings" class="detail-tab-pane ${activeDetailTab==='settings'?'active':''}">
+    <!-- ══════════════ ВКЛАДКА 1: НАЛАШТУВАННЯ ФІДУ ══════════════ -->
+    <div id="tab-info" class="detail-tab-pane ${activeDetailTab==='info'?'active':''}">
 
       <div class="card">
         <div class="card-title">Інформація про фід</div>
         <div class="detail-grid">
           <div class="detail-item"><label>Назва</label><span>${esc(feed.name)}</span></div>
           <div class="detail-item"><label>ID</label><span>${feed.id}</span></div>
-          <div class="detail-item"><label>Джерело</label>
-            <span>${isUrl ? '🔗 URL' : '📄 Файл'}</span>
-          </div>
+          <div class="detail-item"><label>Джерело</label><span>${isUrl ? '🔗 URL' : '📄 Файл'}</span></div>
           <div class="detail-item"><label>Статус</label>
             <span><span class="status-badge ${feed.status}">${statusLabel[feed.status]}</span></span>
           </div>
@@ -770,57 +786,19 @@ function renderDetail(feed) {
         ${isUrl ? `
         <div style="margin-top:16px">
           <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px">URL джерела</label>
-          <div class="source-url-badge">
-            <span>🔗</span><span>${esc(feed.source_url)}</span>
-          </div>
+          <div class="source-url-badge"><span>🔗</span><span>${esc(feed.source_url)}</span></div>
           ${feed.last_fetched ? `<div class="last-fetched">Останнє завантаження: ${formatDate(feed.last_fetched)}</div>` : ''}
         </div>` : ''}
       </div>
-
-      ${feed.status === 'processing' ? `
-      <div class="progress-block">
-        <div class="progress-spinner"></div>
-        <span class="progress-text">${esc(feed.progress || 'Обробка...')}</span>
-      </div>` : ''}
-
-      ${feed.status === 'error' ? `
-      <div class="progress-block" style="border-left:3px solid var(--accent)">
-        <span>❌</span>
-        <span class="progress-text" style="color:var(--accent)">${esc(feed.progress)}</span>
-      </div>` : ''}
 
       ${feed.stats ? `
       <div class="card">
         <div class="card-title">Статистика обробки</div>
         <div class="stats-grid">
-          <div class="stat-box">
-            <div class="stat-value">${feed.stats.total}</div>
-            <div class="stat-label">Всього товарів</div>
-          </div>
-          <div class="stat-box success">
-            <div class="stat-value">${feed.stats.success}</div>
-            <div class="stat-label">Оброблено</div>
-          </div>
-          <div class="stat-box ${feed.stats.skipped > 0 ? 'warn' : ''}">
-            <div class="stat-value">${feed.stats.skipped}</div>
-            <div class="stat-label">Пропущено</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value">${feed.stats.total > 0 ? Math.round(feed.stats.success/feed.stats.total*100) : 0}%</div>
-            <div class="stat-label">Успішно</div>
-          </div>
-        </div>
-      </div>` : ''}
-
-      ${feed.status === 'done' ? `
-      <div class="card">
-        <div class="card-title">Превʼю банера</div>
-        <div class="preview-wrap" id="preview-wrap">
-          <div class="preview-empty"><span class="icon">🖼</span>Завантаження...</div>
-        </div>
-        <div class="btn-row" style="margin-top:12px">
-          <button class="btn btn-secondary btn-sm" onclick="loadPreview('${feed.id}')">🔀 Інший випадковий банер</button>
-          <span id="preview-counter" style="font-size:12px;color:var(--muted);align-self:center"></span>
+          <div class="stat-box"><div class="stat-value">${feed.stats.total}</div><div class="stat-label">Всього</div></div>
+          <div class="stat-box success"><div class="stat-value">${feed.stats.success}</div><div class="stat-label">Оброблено</div></div>
+          <div class="stat-box ${feed.stats.skipped>0?'warn':''}"><div class="stat-value">${feed.stats.skipped}</div><div class="stat-label">Пропущено</div></div>
+          <div class="stat-box"><div class="stat-value">${feed.stats.total>0?Math.round(feed.stats.success/feed.stats.total*100):0}%</div><div class="stat-label">Успішно</div></div>
         </div>
       </div>` : ''}
 
@@ -835,103 +813,32 @@ function renderDetail(feed) {
           <button class="btn btn-secondary btn-sm" onclick="copyPublicUrl()">📋 Копіювати</button>
         </div>
         <div class="btn-row" style="margin-top:10px">
-          <a class="btn btn-ghost btn-sm" href="${feed.public_url}" target="_blank">🔗 Відкрити у браузері</a>
-          <a class="btn btn-secondary btn-sm" href="/api/feeds/${feed.id}/download">⬇ Скачати файл</a>
+          <a class="btn btn-ghost btn-sm" href="${feed.public_url}" target="_blank">🔗 Відкрити</a>
+          <a class="btn btn-secondary btn-sm" href="/api/feeds/${feed.id}/download">⬇ Скачати</a>
         </div>
       </div>` : ''}
-
-      <div class="card">
-        <div class="card-title">Налаштування оформлення</div>
-
-        <div class="form-group full" style="margin-bottom:16px">
-          <label>Стиль банера</label>
-          <div class="style-grid">
-            ${[
-              ['classic',  '🔲', 'Classic',  'Класична рамка + бейдж'],
-              ['neon',     '⚡', 'Neon',     'Glow-ефект + неонова смуга'],
-              ['luxury',   '✨', 'Luxury',   'Золота рамка + темна смуга'],
-              ['minimal',  '◻️', 'Minimal',  'Тонка рамка + акцентні кути'],
-              ['gradient', '🌈', 'Gradient', 'Градієнтна рамка і смуга'],
-              ['dark',     '🌑', 'Dark',     'Dark mode + яскравий акцент'],
-            ].map(([val, icon, name, desc]) => `
-              <div class="style-card ${(cfg.banner_style||'classic')===val?'active':''}"
-                   onclick="selectStyle('${val}', this)">
-                <span class="style-icon">${icon}</span>
-                <span class="style-name">${name}</span>
-                <span class="style-desc">${desc}</span>
-              </div>
-            `).join('')}
-          </div>
-          <input type="hidden" id="d-banner-style" value="${cfg.banner_style || 'classic'}">
-        </div>
-
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Колір акценту</label>
-            <div class="color-row">
-              <input type="color" id="d-border-color" value="${cfg.border_color || '#FF0000'}"
-                     oninput="document.getElementById('d-border-color-text').value=this.value">
-              <input type="text" id="d-border-color-text" value="${cfg.border_color || '#FF0000'}" maxlength="7"
-                     oninput="document.getElementById('d-border-color').value=this.value">
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Товщина рамки (px)</label>
-            <input type="number" id="d-border-width" value="${cfg.border_width || 18}" min="1" max="60">
-          </div>
-          <div class="form-group">
-            <label>Позиція ціни</label>
-            <select id="d-badge-position">
-              ${['bottom-right','bottom-left','top-right','top-left'].map(p =>
-                `<option ${p === (cfg.badge_position||'bottom-right') ? 'selected' : ''}>${p}</option>`
-              ).join('')}
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Розмір шрифту ціни (px)</label>
-            <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size || 52}" min="16" max="120">
-          </div>
-          <div class="form-group full">
-            <label>Домен сайту на банері</label>
-            <input type="text" id="d-domain" value="${cfg.domain || ''}" placeholder="наприклад: myshop.com">
-            <span style="font-size:11px;color:var(--muted);margin-top:4px">
-              Якщо порожньо — домен буде взятий автоматично з URL фіду
-            </span>
-          </div>
-        </div>
-        <div class="btn-row" style="margin-top:16px">
-          ${isUrl
-            ? `<button class="btn btn-primary" onclick="refreshFeed('${feed.id}')">🔄 Оновити з URL і обробити</button>
-               <button class="btn btn-secondary" onclick="reprocess('${feed.id}')">▶ Без оновлення</button>`
-            : `<button class="btn btn-primary" onclick="reprocess('${feed.id}')">▶ Обробити з цими налаштуваннями</button>`
-          }
-        </div>
-      </div>
 
       ${isUrl ? `
       <div class="card">
         <div class="card-title">Автооновлення</div>
         <p style="font-size:13px;color:var(--muted);margin-bottom:20px">
-          Фід буде автоматично завантажений з URL і переоброблений щодня у вказаний час.
+          Фід буде автоматично завантажений та переоброблений щодня у вказаний час.
         </p>
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px">
-          <div style="display:flex;align-items:center;gap:16px">
-            <div class="form-group" style="margin:0">
-              <label style="margin-bottom:6px;display:block">Час запуску</label>
-              <div style="display:flex;align-items:center;gap:8px">
-                <input type="time" id="d-sched-time"
-                  value="${sched.run_time || '06:00'}"
-                  style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
-                         color:var(--text);font-family:var(--mono);font-size:22px;
-                         padding:8px 14px;outline:none;width:140px;cursor:pointer">
-                <span style="font-size:12px;color:var(--muted)">щодня</span>
-              </div>
+          <div class="form-group" style="margin:0">
+            <label style="margin-bottom:6px;display:block">Час запуску</label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="time" id="d-sched-time" value="${sched.run_time || '06:00'}"
+                style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                       color:var(--text);font-family:var(--mono);font-size:22px;
+                       padding:8px 14px;outline:none;width:140px;cursor:pointer">
+              <span style="font-size:12px;color:var(--muted)">щодня</span>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
             <span style="font-size:13px;color:var(--muted)">Увімкнено</span>
             <label class="toggle">
-              <input type="checkbox" id="d-sched-enabled" ${sched.enabled ? 'checked' : ''}>
+              <input type="checkbox" id="d-sched-enabled" ${sched.enabled?'checked':''}>
               <span class="toggle-slider"></span>
             </label>
           </div>
@@ -939,35 +846,180 @@ function renderDetail(feed) {
         <div class="btn-row" style="margin-top:18px">
           <button class="btn btn-secondary btn-sm" onclick="saveSchedule('${feed.id}')">💾 Зберегти розклад</button>
         </div>
-        ${sched.enabled ? `
-        <div style="margin-top:14px;display:flex;align-items:center;gap:8px">
+        ${sched.enabled ? `<div style="margin-top:14px;display:flex;align-items:center;gap:8px">
           <span style="font-size:12px;color:var(--green)">● Активне</span>
-          <span style="font-size:12px;color:var(--muted)">— оновлення щодня о ${sched.run_time || '06:00'}</span>
+          <span style="font-size:12px;color:var(--muted)">— щодня о ${sched.run_time||'06:00'}</span>
         </div>` : ''}
-        ${sched.last_run ? `<p style="font-size:12px;color:var(--muted);margin-top:6px">Останнє оновлення: ${formatDate(sched.last_run)}</p>` : ''}
+        ${sched.last_run ? `<p style="font-size:12px;color:var(--muted);margin-top:6px">Останнє: ${formatDate(sched.last_run)}</p>` : ''}
       </div>` : ''}
 
       <div class="card">
+        <div class="card-title">Дії</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="switchDetailTab('design','${feed.id}')">
+            🎨 Налаштувати зовнішній вигляд →
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-title">Небезпечна зона</div>
-        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Видалення фіду незворотнє. Всі файли будуть знищені.</p>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Видалення фіду незворотнє.</p>
         <button class="btn btn-danger btn-sm" onclick="deleteFeed('${feed.id}')">🗑 Видалити фід</button>
       </div>
 
-    </div><!-- /tab-settings -->
+    </div><!-- /tab-info -->
 
-    <!-- ══════════════════ ВКЛАДКА: ЛОГУВАННЯ ══════════════════ -->
+    <!-- ══════════════ ВКЛАДКА 2: ЗОВНІШНІЙ ВИГЛЯД ══════════════ -->
+    <div id="tab-design" class="detail-tab-pane ${activeDetailTab==='design'?'active':''}">
+
+      <div class="card">
+        <div class="card-title">Стиль банера</div>
+        <div class="style-grid">
+          ${[
+            ['classic',  '🔲', 'Classic',  'Класична рамка + бейдж'],
+            ['neon',     '⚡', 'Neon',     'Glow-ефект + неонова смуга'],
+            ['luxury',   '✨', 'Luxury',   'Золота рамка + темна смуга'],
+            ['minimal',  '◻️', 'Minimal',  'Тонка рамка + кути'],
+            ['gradient', '🌈', 'Gradient', 'Градієнтна рамка і смуга'],
+            ['dark',     '🌑', 'Dark',     'Dark mode + акцент'],
+          ].map(([val,icon,name,desc]) => `
+            <div class="style-card ${(cfg.banner_style||'classic')===val?'active':''}"
+                 onclick="selectStyle('${val}', this)">
+              <span class="style-icon">${icon}</span>
+              <span class="style-name">${name}</span>
+              <span class="style-desc">${desc}</span>
+            </div>
+          `).join('')}
+        </div>
+        <input type="hidden" id="d-banner-style" value="${cfg.banner_style||'classic'}">
+      </div>
+
+      <div class="card">
+        <div class="card-title">Параметри оформлення</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Колір акценту</label>
+            <div class="color-row">
+              <input type="color" id="d-border-color" value="${cfg.border_color||'#FF0000'}"
+                     oninput="document.getElementById('d-border-color-text').value=this.value">
+              <input type="text" id="d-border-color-text" value="${cfg.border_color||'#FF0000'}" maxlength="7"
+                     oninput="document.getElementById('d-border-color').value=this.value">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Товщина рамки (px)</label>
+            <input type="number" id="d-border-width" value="${cfg.border_width||18}" min="1" max="60">
+          </div>
+          <div class="form-group">
+            <label>Позиція ціни</label>
+            <select id="d-badge-position">
+              ${['bottom-right','bottom-left','top-right','top-left'].map(p=>
+                `<option ${p===(cfg.badge_position||'bottom-right')?'selected':''}>${p}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Розмір шрифту ціни (px)</label>
+            <input type="number" id="d-badge-font-size" value="${cfg.badge_font_size||52}" min="16" max="120">
+          </div>
+          <div class="form-group full">
+            <label>Домен сайту на банері</label>
+            <input type="text" id="d-domain" value="${cfg.domain||''}" placeholder="наприклад: myshop.com">
+            <span style="font-size:11px;color:var(--muted);margin-top:4px">
+              Якщо порожньо — домен береться автоматично з URL фіду
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Превʼю одного товару -->
+      <div class="card">
+        <div class="card-title">Превʼю банера</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+          Обробіть один випадковий товар щоб побачити як виглядатиме банер з поточними налаштуваннями.
+        </p>
+
+        <div id="preview-wrap" class="preview-wrap">
+          ${isDone
+            ? `<div class="preview-empty"><span class="icon">🖼</span>Натисни кнопку для оновлення превʼю</div>`
+            : `<div class="preview-empty"><span class="icon">🎨</span>Превʼю ще не згенеровано</div>`
+          }
+        </div>
+
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-secondary" id="btn-preview-one"
+                  onclick="previewOne('${feed.id}')">
+            👁 Обробити 1 товар для превʼю
+          </button>
+          ${isDone ? `
+          <button class="btn btn-ghost btn-sm" onclick="loadPreview('${feed.id}')">
+            🔀 Інший банер із готових
+          </button>` : ''}
+          <span id="preview-counter" style="font-size:12px;color:var(--muted);align-self:center"></span>
+        </div>
+      </div>
+
+      <!-- Запуск повної генерації -->
+      <div class="card" style="border:1px solid rgba(129,140,248,.3);background:rgba(129,140,248,.04)">
+        <div class="card-title" style="color:#818cf8">Запустити генерацію фіду</div>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
+          Після підтвердження налаштувань — запустіть повну обробку всіх товарів.
+          Під час генерації редагування недоступне.
+        </p>
+        <div class="btn-row">
+          ${isUrl
+            ? `<button class="btn btn-primary" onclick="refreshFeed('${feed.id}')">
+                 🚀 Оновити з URL і обробити весь фід
+               </button>
+               <button class="btn btn-secondary" onclick="reprocess('${feed.id}')">
+                 ▶ Обробити без оновлення
+               </button>`
+            : `<button class="btn btn-primary" onclick="reprocess('${feed.id}')">
+                 🚀 Обробити весь фід
+               </button>`
+          }
+        </div>
+      </div>
+
+    </div><!-- /tab-design -->
+
+    <!-- ══════════════ ВКЛАДКА 3: ГЕНЕРАЦІЯ / ЛОГИ ══════════════ -->
     <div id="tab-logs" class="detail-tab-pane ${activeDetailTab==='logs'?'active':''}">
-      <div class="card" style="padding:0;overflow:hidden">
 
-        <!-- Заголовок лог-панелі -->
+      ${isProc ? `
+      <!-- Блок зупинки -->
+      <div class="card" style="border:1px solid var(--accent);background:rgba(255,59,59,.04)">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
+          <div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:4px">⚙️ Генерація триває...</div>
+            <div style="font-size:13px;color:var(--muted)">${esc(feed.progress||'Обробка...')}</div>
+          </div>
+          <button class="btn btn-danger" onclick="stopProcessing('${feed.id}')">
+            ⏹ Зупинити генерацію
+          </button>
+        </div>
+        <div style="margin-top:14px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:12px;color:var(--muted)">Прогрес</span>
+            <span style="font-size:12px;color:#818cf8;font-family:var(--mono)" id="prog-detail-label">
+              ${feed.progress_current||0} / ${feed.progress_total||0}
+            </span>
+          </div>
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+            <div id="prog-detail-fill" style="height:100%;background:#818cf8;border-radius:3px;
+                 transition:width .4s ease;width:${feed.progress_total>0?Math.round((feed.progress_current||0)/feed.progress_total*100):0}%">
+            </div>
+          </div>
+        </div>
+      </div>` : ''}
+
+      <div class="card" style="padding:0;overflow:hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;
                     flex-wrap:wrap;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border)">
           <div style="display:flex;align-items:center;gap:10px">
             <div class="card-title" style="margin:0">Журнал подій</div>
-            ${feed.status === 'processing' ? `
-              <span class="log-live-badge">
-                <span class="log-live-dot"></span>live
-              </span>` : ''}
+            ${isProc ? `<span class="log-live-badge"><span class="log-live-dot"></span>live</span>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span id="log-count" style="font-size:12px;color:var(--muted)">${logs.length} записів</span>
@@ -984,14 +1036,13 @@ function renderDetail(feed) {
           </div>
         </div>
 
-        <!-- Статистика по рівнях -->
-        <div style="display:flex;gap:0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;border-bottom:1px solid var(--border)">
           ${[
-            ['info',    'ℹ️', logs.filter(l=>l.level==='info').length,    '#818cf8'],
-            ['success', '✅', logs.filter(l=>l.level==='success').length, '#4ade80'],
-            ['warning', '⚠️', logs.filter(l=>l.level==='warning').length, '#fbbf24'],
-            ['error',   '❌', logs.filter(l=>l.level==='error').length,   '#f87171'],
-          ].map(([lvl,icon,cnt,col]) => `
+            ['info',    logs.filter(l=>l.level==='info').length,    '#818cf8'],
+            ['success', logs.filter(l=>l.level==='success').length, '#4ade80'],
+            ['warning', logs.filter(l=>l.level==='warning').length, '#fbbf24'],
+            ['error',   logs.filter(l=>l.level==='error').length,   '#f87171'],
+          ].map(([lvl,cnt,col]) => `
             <div onclick="document.getElementById('log-filter').value='${lvl}';filterLogs()"
                  style="flex:1;padding:10px 0;text-align:center;cursor:pointer;
                         border-right:1px solid var(--border);transition:background .15s"
@@ -1010,15 +1061,14 @@ function renderDetail(feed) {
           </div>
         </div>
 
-        <!-- Логи -->
         <div class="log-container" id="log-container">
-          ${logs.length === 0
+          ${logs.length===0
             ? `<div class="log-empty">
                 <div style="font-size:36px;margin-bottom:10px">📋</div>
                 <div style="font-weight:600;margin-bottom:4px">Журнал порожній</div>
-                <div style="font-size:12px">Події з'являться тут після обробки фіду</div>
+                <div style="font-size:12px">Події з'являться тут під час генерації фіду</div>
                </div>`
-            : [...logs].reverse().map((l,i) => `
+            : [...logs].reverse().map(l=>`
               <div class="log-row log-${l.level}" data-level="${l.level}">
                 <span class="log-ts">${formatLogTs(l.ts)}</span>
                 <span class="log-icon">${logIcon(l.level)}</span>
@@ -1027,16 +1077,18 @@ function renderDetail(feed) {
           }
         </div>
       </div>
+
     </div><!-- /tab-logs -->
   `;
 
-  if (feed.status === 'processing') startPolling(feed.id);
+  if (isProc) startPolling(feed.id);
   else stopPolling();
 
-  if (feed.status === 'done' && activeDetailTab === 'settings') {
+  if (isDone && activeDetailTab === 'design') {
     setTimeout(() => loadPreview(feed.id), 50);
   }
 }
+
 
 // ─────────────────────────────────────────────────────────
 // Preview
@@ -1101,7 +1153,7 @@ function startPolling(id) {
         if (s.logs)       feeds[idx].logs        = s.logs;
       }
 
-      // Оновлюємо прогрес-бар в картці без повного перемальовування списку
+      // Оновлюємо прогрес-бар у картці списку
       const cur   = feeds[idx]?.progress_current || 0;
       const total = feeds[idx]?.progress_total   || 0;
       const pct   = total > 0 ? Math.round(cur / total * 100) : 0;
@@ -1110,7 +1162,13 @@ function startPolling(id) {
       if (fill)  fill.style.width = `${pct}%`;
       if (label) label.textContent = `${cur} / ${total}`;
 
-      // Якщо прогрес-рядка ще немає (total щойно з'явився) — перемальовуємо список
+      // Оновлюємо великий прогрес-бар на вкладці логів
+      const detailFill  = document.getElementById('prog-detail-fill');
+      const detailLabel = document.getElementById('prog-detail-label');
+      if (detailFill)  detailFill.style.width = `${pct}%`;
+      if (detailLabel) detailLabel.textContent = `${cur} / ${total}`;
+
+      // Якщо прогрес-рядка ще немає — перемальовуємо список
       if (total > 0 && !document.getElementById(`prog-fill-${id}`)) {
         renderList();
       }
@@ -1125,13 +1183,17 @@ function startPolling(id) {
 
       if (s.status !== 'processing') {
         stopPolling();
-        renderList(); // фінальне оновлення щоб прибрати прогрес-бар
+        renderList();
         if (s.status === 'done') {
           toast('✅ Фід успішно оброблено!');
-          activeDetailTab = 'settings';
+          activeDetailTab = 'info';
           if (activeFeedId === id) renderDetail(feeds[idx]);
         }
-        if (s.status === 'error') toast('❌ Помилка обробки', 'error');
+        if (s.status === 'error') {
+          toast('❌ Помилка обробки', 'error');
+          activeDetailTab = 'logs';
+          if (activeFeedId === id) renderDetail(feeds[idx]);
+        }
         updateLogBadge(feeds[idx]);
       }
     } catch(e) {}
@@ -1441,6 +1503,61 @@ function switchDetailTab(tab, feedId) {
   activeDetailTab = tab;
   const feed = feeds.find(f => f.id === feedId);
   if (feed) renderDetail(feed);
+}
+
+function tabBlockedToast() {
+  toast('⏳ Зачекайте — зміни недоступні під час генерації', 'error');
+}
+
+// ─────────────────────────────────────────────────────────
+// Preview ONE item (обробити 1 товар для превʼю)
+// ─────────────────────────────────────────────────────────
+async function previewOne(id) {
+  const btn = document.getElementById('btn-preview-one');
+  const wrap = document.getElementById('preview-wrap');
+  if (!wrap) return;
+
+  const cfg = {
+    border_color:    document.getElementById('d-border-color')?.value,
+    border_width:    document.getElementById('d-border-width')?.value,
+    badge_position:  document.getElementById('d-badge-position')?.value,
+    badge_font_size: document.getElementById('d-badge-font-size')?.value,
+    banner_style:    document.getElementById('d-banner-style')?.value,
+    domain:          document.getElementById('d-domain')?.value,
+  };
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Генеруємо...'; }
+  wrap.innerHTML = `<div class="preview-empty">
+    <div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:#818cf8;
+                border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px"></div>
+    Обробляємо один товар...
+  </div>`;
+
+  try {
+    const data = await api('POST', `/api/feeds/${id}/preview-one`, cfg);
+    wrap.innerHTML = `
+      <img src="${data.image_url}?t=${Date.now()}" alt="Preview"
+           style="max-width:100%;border-radius:8px;display:block"
+           onerror="document.getElementById('preview-wrap').innerHTML='<div class=\\'preview-empty\\'><span class=\\'icon\\'>❌</span>Не вдалося завантажити зображення</div>'">
+    `;
+    const counter = document.getElementById('preview-counter');
+    if (counter) counter.textContent = data.item_id ? `Товар ID: ${data.item_id}` : '';
+  } catch(e) {
+    wrap.innerHTML = `<div class="preview-empty"><span class="icon">⚠️</span>${esc(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '👁 Обробити 1 товар для превʼю'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Stop processing
+// ─────────────────────────────────────────────────────────
+async function stopProcessing(id) {
+  if (!confirm('Зупинити генерацію фіду? Вже оброблені товари будуть збережені.')) return;
+  try {
+    await api('POST', `/api/feeds/${id}/stop`);
+    toast('⏹ Зупинка генерації...');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ─────────────────────────────────────────────────────────

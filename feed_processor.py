@@ -21,18 +21,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
-    # Стиль: "classic" | "neon" | "luxury" | "minimal" | "gradient" | "dark"
     "banner_style":    "classic",
     "border_color":    "#FF0000",
-    "border_width":    18,
-    "badge_font_size": 52,
+    "border_width":    14,
+    "badge_font_size": 40,
     "badge_position":  "bottom-right",
     "domain":          "",
-    "output_size":     (800, 800),   # 800px економить ~2x RAM vs 1200px
-    "output_quality":  85,
+    "output_size":     (600, 600),   # 600px — мінімум для Google/Meta, ~4x менше RAM ніж 1200px
+    "output_quality":  82,
     "output_dir":      "enhanced_images",
-    "request_timeout": 15,
-    "retry_count":     2,            # зменшено з 3 до 2 для швидшої обробки
+    "request_timeout": 10,
+    "retry_count":     2,
     "retry_delay":     1,
     "output_feed":     "enhanced_feed.xml",
     "base_url":        "",
@@ -85,7 +84,11 @@ def extract_item_data(item) -> dict:
         "image_link": find_text(item, "image_link", "link"),
     }
 
+_font_cache = {}
+
 def get_font(size: int):
+    if size in _font_cache:
+        return _font_cache[size]
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -95,11 +98,20 @@ def get_font(size: int):
     ]
     for path in candidates:
         if os.path.exists(path):
-            try: return ImageFont.truetype(path, size)
+            try:
+                font = ImageFont.truetype(path, size)
+                _font_cache[size] = font
+                return font
             except: continue
-    return ImageFont.load_default()
+    font = ImageFont.load_default()
+    _font_cache[size] = font
+    return font
+
+_font_regular_cache = {}
 
 def get_font_regular(size: int):
+    if size in _font_regular_cache:
+        return _font_regular_cache[size]
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -108,24 +120,38 @@ def get_font_regular(size: int):
     ]
     for path in candidates:
         if os.path.exists(path):
-            try: return ImageFont.truetype(path, size)
+            try:
+                font = ImageFont.truetype(path, size)
+                _font_regular_cache[size] = font
+                return font
             except: continue
-    return ImageFont.load_default()
+    font = ImageFont.load_default()
+    _font_regular_cache[size] = font
+    return font
 
 def download_image(url: str, cfg: dict):
+    """Завантажує зображення і одразу масштабує до output_size — мінімум пам'яті."""
     if not url or not url.startswith("http"): return None
+    target_size = cfg.get("output_size", (800, 800))
     for attempt in range(1, cfg["retry_count"] + 1):
         try:
             resp = requests.get(url, timeout=cfg["request_timeout"], stream=True)
             resp.raise_for_status()
-            # Читаємо контент одразу у BytesIO без зберігання в пам'яті Python
             buf = io.BytesIO()
-            for chunk in resp.iter_content(chunk_size=8192):
+            for chunk in resp.iter_content(chunk_size=16384):
                 buf.write(chunk)
             resp.close()
             buf.seek(0)
-            img = Image.open(buf).convert("RGBA")
+            # Відкриваємо як RGB одразу (3 канали замість 4 — 25% економії)
+            img = Image.open(buf)
+            img.load()  # примусово завантажуємо пікселі
             buf.close()
+            # Одразу масштабуємо до потрібного розміру
+            # (не тримаємо оригінал 3000×3000 в пам'яті разом з результатом)
+            if img.size != tuple(target_size):
+                img = img.resize(target_size, Image.LANCZOS)
+            # Конвертуємо в RGBA для малювання
+            img = img.convert("RGBA")
             return img
         except Exception as e:
             log.warning(f"Спроба {attempt} — {url}: {e}")
@@ -180,42 +206,34 @@ def style_classic(img: Image.Image, price: str, domain: str, cfg: dict) -> Image
 
 
 def style_neon(img: Image.Image, price: str, domain: str, cfg: dict) -> Image.Image:
-    """Неон: яскрава рамка з glow-ефектом + неонова ціна."""
+    """Неон: яскрава рамка з ефектом + неонова ціна."""
     W, H = img.size
     color = safe_str(cfg.get("border_color", "#FF0000"))
     bw    = int(cfg.get("border_width", 18))
     rgba  = hex_to_rgba(color)
+    draw  = ImageDraw.Draw(img)
 
-    # Glow: малюємо рамку на окремому шарі і розмиваємо
-    glow = Image.new("RGBA", img.size, (0,0,0,0))
-    gd   = ImageDraw.Draw(glow)
-    for i in range(bw*2):
-        alpha = int(180 * (1 - i/(bw*2)))
-        gd.rectangle([i, i, W-1-i, H-1-i], outline=(*rgba[:3], alpha))
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=6))
-    img  = Image.alpha_composite(img, glow)
+    # Малюємо рамку з градієнтом прозорості (без blur — економія пам'яті)
+    for i in range(bw * 2):
+        alpha = int(200 * (1 - i / (bw * 2)))
+        draw.rectangle([i, i, W-1-i, H-1-i], outline=(*rgba[:3], alpha))
 
-    draw = ImageDraw.Draw(img)
     # Тверда рамка поверх
     for i in range(bw):
         draw.rectangle([i, i, W-1-i, H-1-i], outline=rgba)
 
-    # Ціна — неоновий прямокутник на всю ширину знизу
+    # Ціна — неонова смуга знизу
     if price:
-        font  = get_font(int(cfg.get("badge_font_size", 52)))
+        font    = get_font(int(cfg.get("badge_font_size", 52)))
         strip_h = int(cfg.get("badge_font_size", 52)) + 36
-        bar = Image.new("RGBA", (W, strip_h), (*rgba[:3], 220))
-        bar = bar.filter(ImageFilter.GaussianBlur(radius=2))
-        img.alpha_composite(bar, (0, H - strip_h))
-        draw = ImageDraw.Draw(img)
+        # Малюємо смугу напряму без blur
+        draw.rectangle([0, H-strip_h, W, H], fill=(*rgba[:3], 220))
         bbox = draw.textbbox((0,0), price, font=font)
         tx = (W - (bbox[2]-bbox[0])) // 2
         ty = H - strip_h + (strip_h - (bbox[3]-bbox[1])) // 2
-        # Тінь тексту
         draw.text((tx+2-bbox[0], ty+2-bbox[1]), price, font=font, fill=(0,0,0,160))
         draw.text((tx-bbox[0], ty-bbox[1]), price, font=font, fill=(255,255,255,255))
 
-    # Домен — верхній рядок
     if domain:
         df   = get_font_regular(26)
         db   = draw.textbbox((0,0), domain, font=df)
@@ -315,14 +333,8 @@ def style_minimal(img: Image.Image, price: str, domain: str, cfg: dict) -> Image
         elif pos == "top-right":   x,y = W-bw2-margin, margin
         else:                      x,y = margin, margin
 
-        # Тінь
-        shadow = Image.new("RGBA", img.size, (0,0,0,0))
-        sd = ImageDraw.Draw(shadow)
-        sd.rounded_rectangle([x+4,y+4,x+bw2+4,y+bh+4], radius=8, fill=(0,0,0,100))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=4))
-        img    = Image.alpha_composite(img, shadow)
-        draw   = ImageDraw.Draw(img)
-
+        # Тінь — малюємо напряму без blur (економія пам'яті)
+        draw.rounded_rectangle([x+3,y+3,x+bw2+3,y+bh+3], radius=8, fill=(0,0,0,80))
         draw.rounded_rectangle([x,y,x+bw2,y+bh], radius=8, fill=(*rgba[:3], 240))
         # Тонка біла лінія всередині
         draw.rounded_rectangle([x+2,y+2,x+bw2-2,y+bh-2], radius=6, outline=(255,255,255,120), width=1)
@@ -458,11 +470,12 @@ STYLE_MAP = {
 
 
 def enhance_image(original_img: Image.Image, price: str, cfg: dict) -> Image.Image:
-    img    = original_img.copy().resize(cfg.get("output_size", (1200,1200)), Image.LANCZOS)
+    # Зображення вже правильного розміру після download_image
+    # Копіюємо тільки якщо потрібно (уникаємо зайвої копії)
+    img    = original_img  # працюємо напряму, не копіюємо
     style  = safe_str(cfg.get("banner_style", "classic"))
     domain = safe_str(cfg.get("domain", ""))
 
-    # Витягуємо домен з source_url якщо не вказано явно
     if not domain:
         source = safe_str(cfg.get("source_url", ""))
         if source:
@@ -506,74 +519,258 @@ def set_image_link(item, new_url: str):
 
 # ─── Головна функція ──────────────────────────────────────────────────────────
 
+# ─── Головна функція ──────────────────────────────────────────────────────────
+
+def _get_safe_workers() -> int:
+    """Визначає безпечну кількість паралельних завантажень на основі вільної RAM."""
+    try:
+        import psutil
+        free_mb = psutil.virtual_memory().available / 1024 / 1024
+        # Одне зображення 600×600 RGBA ≈ 1.4MB + HTTP буфер ≈ 3MB total
+        # Залишаємо 150MB для Flask/XML/OS
+        safe_slots = max(1, int((free_mb - 150) / 3))
+        workers = min(safe_slots, 6)  # не більше 6 навіть якщо RAM вистачає
+        log.info(f"RAM вільно: {free_mb:.0f}MB → {workers} паралельних завантажень")
+        return workers
+    except ImportError:
+        # psutil не встановлено — безпечний мінімум
+        return 3
+
 def process_feed(feed_path: str, cfg: dict, progress_callback=None) -> dict:
+    """
+    Швидка обробка з адаптивним pipeline:
+    - Паралельне завантаження (кількість потоків = функція від вільної RAM)
+    - Послідовна обробка Pillow — контроль пам'яті
+    - Перевірка stop_requested кожні 5 товарів
+    """
     import gc
+    from concurrent.futures import ThreadPoolExecutor
+
     tree, items = parse_feed(feed_path)
-    total = len(items)
-    success = skipped = 0
+    total   = len(items)
+    success = 0
+    skipped = 0
 
+    # Витягуємо дані всіх товарів одразу (XML fast, no I/O)
+    item_data_list = []
     for i, item in enumerate(items, 1):
-        img = None
-        enhanced = None
-        try:
-            data    = extract_item_data(item)
-            img_url = safe_str(data.get("image_link",""))
-            price   = safe_str(data.get("price",""))
-            raw_id  = safe_str(data.get("id",""))
+        data    = extract_item_data(item)
+        img_url = safe_str(data.get("image_link", ""))
+        price   = safe_str(data.get("price", ""))
+        raw_id  = safe_str(data.get("id", ""))
+        item_id = raw_id or (hashlib.md5(img_url.encode()).hexdigest()[:8] if img_url else f"item_{i}")
+        item_data_list.append((i, item, item_id, img_url, price))
 
-            item_id = raw_id or (hashlib.md5(img_url.encode()).hexdigest()[:8] if img_url else f"item_{i}")
-            log.info(f"[{i}/{total}] ID={item_id}  Ціна={price}  URL={img_url[:80]}")
+    base    = safe_str(cfg.get("base_url", ""))
+    workers = _get_safe_workers()
+    BATCH   = workers * 2  # розмір батчу — кратно кількості воркерів
 
-            if progress_callback and (i == 1 or i % 5 == 0 or i == total):
-                progress_callback(i, total, success, skipped)
+    i_processed = 0
 
-            if not img_url:
-                log.warning("  → Немає URL, пропускаємо.")
-                skipped += 1
-                continue
+    for batch_start in range(0, total, BATCH):
+        # Перевіряємо RAM перед кожним батчем і адаптуємо
+        workers = _get_safe_workers()
+        BATCH   = workers * 2
 
-            img = download_image(img_url, cfg)
-            if img is None:
-                log.warning("  → Не завантажено, пропускаємо.")
-                skipped += 1
-                continue
+        batch = item_data_list[batch_start : batch_start + BATCH]
 
-            enhanced = enhance_image(img, price, cfg)
+        # Паралельно завантажуємо всі зображення батчу
+        downloaded = {}  # i → (entry, img)
 
-            # Явно вивантажуємо оригінал з пам'яті
-            img.close()
-            img = None
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {}
+            for entry in batch:
+                (i, item, item_id, img_url, price) = entry
+                if img_url:
+                    fut = executor.submit(download_image, img_url, cfg)
+                    future_map[fut] = entry
+                else:
+                    downloaded[i] = (entry, None)
 
-            filename = f"{item_id}.jpg"
-            save_image(enhanced, filename, cfg)
+            for fut, entry in future_map.items():
+                (i, item, item_id, img_url, price) = entry
+                try:
+                    img = fut.result()
+                    downloaded[i] = (entry, img)
+                except Exception as e:
+                    log.warning(f"  → Помилка завантаження [{item_id}]: {e}")
+                    downloaded[i] = (entry, None)
 
-            # Явно вивантажуємо оброблене зображення
-            enhanced.close()
+        # Обробляємо послідовно в правильному порядку
+        for i_num in sorted(downloaded.keys()):
+            (i, item, item_id, img_url, price), img = downloaded[i_num]
+            i_processed += 1
             enhanced = None
 
-            base = safe_str(cfg.get("base_url",""))
-            new_url = (base.rstrip("/") + "/" + filename) if base else str(Path(cfg["output_dir"]) / filename)
-            set_image_link(item, new_url)
-            success += 1
+            try:
+                log.info(f"[{i}/{total}] ID={item_id}  Ціна={price}")
 
-        except Exception as e:
-            log.error(f"  → Помилка: {e}")
-            skipped += 1
-        finally:
-            # Гарантовано чистимо пам'ять навіть при помилці
-            if img is not None:
-                try: img.close()
-                except: pass
-            if enhanced is not None:
-                try: enhanced.close()
-                except: pass
-            # Запускаємо збирач сміття кожні 50 зображень
-            if i % 50 == 0:
-                gc.collect()
+                # Перевірка зупинки
+                if progress_callback and (i_processed == 1 or i_processed % 5 == 0 or i_processed == total):
+                    should_stop = progress_callback(i_processed, total, success, skipped)
+                    if should_stop:
+                        log.info(f"⏹ Зупинка на товарі {i}/{total}")
+                        for _, v in downloaded.values():
+                            if v is not None:
+                                try: v.close()
+                                except: pass
+                        gc.collect()
+                        tree.write(safe_str(cfg.get("output_feed", "enhanced_feed.xml")),
+                                   encoding="utf-8", xml_declaration=True)
+                        return {"total": total, "success": success, "skipped": skipped}
 
-    # Фінальна очистка
+                if not img_url:
+                    skipped += 1
+                    continue
+
+                if img is None:
+                    log.warning(f"  → Не завантажено: {img_url[:60]}")
+                    skipped += 1
+                    continue
+
+                enhanced = enhance_image(img, price, cfg)
+                img.close(); img = None
+
+                filename = f"{item_id}.jpg"
+                save_image(enhanced, filename, cfg)
+                enhanced.close(); enhanced = None
+
+                new_url = (base.rstrip("/") + "/" + filename) if base else \
+                          str(Path(cfg["output_dir"]) / filename)
+                set_image_link(item, new_url)
+                success += 1
+
+            except Exception as e:
+                log.error(f"  → Помилка [{item_id}]: {e}")
+                skipped += 1
+            finally:
+                if img      is not None:
+                    try: img.close()
+                    except: pass
+                if enhanced is not None:
+                    try: enhanced.close()
+                    except: pass
+
+        # Після батчу — чистимо пам'ять
+        downloaded.clear()
+        gc.collect()
+
     gc.collect()
+    tree.write(safe_str(cfg.get("output_feed", "enhanced_feed.xml")),
+               encoding="utf-8", xml_declaration=True)
+    log.info(f"\n✅ Готово! Оброблено: {success}/{total}, пропущено: {skipped}")
+    return {"total": total, "success": success, "skipped": skipped}
 
-    tree.write(safe_str(cfg.get("output_feed","enhanced_feed.xml")), encoding="utf-8", xml_declaration=True)
+    tree, items = parse_feed(feed_path)
+    total   = len(items)
+    success = 0
+    skipped = 0
+
+    # Витягуємо дані всіх товарів одразу (XML fast, no I/O)
+    item_data_list = []
+    for i, item in enumerate(items, 1):
+        data    = extract_item_data(item)
+        img_url = safe_str(data.get("image_link", ""))
+        price   = safe_str(data.get("price", ""))
+        raw_id  = safe_str(data.get("id", ""))
+        item_id = raw_id or (hashlib.md5(img_url.encode()).hexdigest()[:8] if img_url else f"item_{i}")
+        item_data_list.append((i, item, item_id, img_url, price))
+
+    base      = safe_str(cfg.get("base_url", ""))
+    # Кількість паралельних завантажень — не більше 8 щоб не перевантажити RAM
+    workers   = min(8, max(2, total // 20))
+
+    # ── Pipeline: завантажуємо батчами, обробляємо одразу ──
+    BATCH = workers * 2   # розмір батчу = 2× воркерів
+
+    i_processed = 0
+
+    for batch_start in range(0, total, BATCH):
+        batch = item_data_list[batch_start : batch_start + BATCH]
+
+        # Паралельно завантажуємо всі зображення батчу
+        futures = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for (i, item, item_id, img_url, price) in batch:
+                if img_url:
+                    fut = executor.submit(download_image, img_url, cfg)
+                    futures[fut] = (i, item, item_id, img_url, price)
+                else:
+                    futures[None] = (i, item, item_id, img_url, price)
+
+        # Обробляємо результати послідовно (контроль пам'яті)
+        downloaded = {}
+        for fut, entry in futures.items():
+            if fut is None:
+                downloaded[entry[0]] = (entry, None)
+            else:
+                try:
+                    img = fut.result()
+                    downloaded[entry[0]] = (entry, img)
+                except Exception as e:
+                    downloaded[entry[0]] = (entry, None)
+
+        # Обробляємо в правильному порядку
+        for i_num in sorted(downloaded.keys()):
+            (i, item, item_id, img_url, price), img = downloaded[i_num]
+            i_processed += 1
+            enhanced = None
+
+            try:
+                log.info(f"[{i}/{total}] ID={item_id}  Ціна={price}")
+
+                # Перевірка зупинки
+                if progress_callback and (i_processed == 1 or i_processed % 5 == 0 or i_processed == total):
+                    should_stop = progress_callback(i_processed, total, success, skipped)
+                    if should_stop:
+                        log.info(f"⏹ Зупинка на товарі {i}/{total}")
+                        # Чистимо незбережені зображення
+                        for img2 in [v[1] for v in downloaded.values() if v[1] is not None]:
+                            try: img2.close()
+                            except: pass
+                        gc.collect()
+                        tree.write(safe_str(cfg.get("output_feed", "enhanced_feed.xml")),
+                                   encoding="utf-8", xml_declaration=True)
+                        return {"total": total, "success": success, "skipped": skipped}
+
+                if not img_url:
+                    skipped += 1
+                    continue
+
+                if img is None:
+                    log.warning(f"  → Не завантажено: {img_url[:60]}")
+                    skipped += 1
+                    continue
+
+                enhanced = enhance_image(img, price, cfg)
+                img.close(); img = None
+
+                filename = f"{item_id}.jpg"
+                save_image(enhanced, filename, cfg)
+                enhanced.close(); enhanced = None
+
+                new_url = (base.rstrip("/") + "/" + filename) if base else \
+                          str(Path(cfg["output_dir"]) / filename)
+                set_image_link(item, new_url)
+                success += 1
+
+            except Exception as e:
+                log.error(f"  → Помилка [{item_id}]: {e}")
+                skipped += 1
+            finally:
+                if img      is not None: 
+                    try: img.close()
+                    except: pass
+                if enhanced is not None:
+                    try: enhanced.close()
+                    except: pass
+
+        # Після кожного батчу — збираємо сміття
+        gc.collect()
+        log.info(f"  ✓ Батч {batch_start//BATCH + 1}: оброблено {success}, пропущено {skipped}")
+
+    gc.collect()
+    tree.write(safe_str(cfg.get("output_feed", "enhanced_feed.xml")),
+               encoding="utf-8", xml_declaration=True)
     log.info(f"\n✅ Готово! Оброблено: {success}/{total}, пропущено: {skipped}")
     return {"total": total, "success": success, "skipped": skipped}
