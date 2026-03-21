@@ -1448,7 +1448,9 @@ function showAddPanel() {
 let activeTab = 'file';
 function switchTab(tab) {
   activeTab = tab;
-  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', (i === 0) === (tab === 'file')));
+  document.querySelectorAll('.tab-row .tab-btn').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('onclick') === `switchTab('${tab}')`);
+  });
   document.getElementById('tab-file').classList.toggle('active', tab === 'file');
   document.getElementById('tab-url').classList.toggle('active', tab === 'url');
 }
