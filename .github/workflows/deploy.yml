@@ -1,0 +1,69 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy API to Cloud Run
+        run: |
+          gcloud run deploy feed-enhancer \
+            --source . \
+            --region europe-west1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 1Gi \
+            --cpu 1 \
+            --max-instances 3 \
+            --timeout 60 \
+            --set-env-vars="GCS_BUCKET=feed-enhancer-490908-data,SERVER_URL=https://feed-enhancer-256815602446.europe-west1.run.app,WORKER_URL=https://feed-enhancer-worker-256815602446.europe-west1.run.app,TASKS_QUEUE=feed-processing-queue,TASKS_LOCATION=europe-west1,GOOGLE_CLOUD_PROJECT=feed-enhancer-490908,SERVICE_ACCOUNT=256815602446-compute@developer.gserviceaccount.com" \
+            --project feed-enhancer-490908
+
+  deploy-worker:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Prepare worker directory
+        run: |
+          mkdir worker-build
+          cp worker.py worker-build/
+          cp feed_processor.py worker-build/
+          cp requirements.txt worker-build/
+          cp Dockerfile.worker worker-build/Dockerfile
+
+      - name: Deploy Worker to Cloud Run
+        run: |
+          cd worker-build
+          gcloud run deploy feed-enhancer-worker \
+            --source . \
+            --region europe-west1 \
+            --platform managed \
+            --no-allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 2 \
+            --max-instances 1 \
+            --timeout 3600 \
+            --set-env-vars="GCS_BUCKET=feed-enhancer-490908-data,SERVER_URL=https://feed-enhancer-256815602446.europe-west1.run.app" \
+            --project feed-enhancer-490908
