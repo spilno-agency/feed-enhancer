@@ -1,57 +1,81 @@
 """
-Feed Enhancer — Web Service з повним керуванням фідами
-======================================================
-GET    /                          — веб-інтерфейс
-GET    /api/feeds                  — список всіх фідів
-POST   /api/feeds                  — додати новий фід (файл або URL)
-DELETE /api/feeds/<id>             — видалити фід
-POST   /api/feeds/<id>/process     — обробити фід вручну
-POST   /api/feeds/<id>/refresh     — перезавантажити з URL і обробити
-PATCH  /api/feeds/<id>/schedule    — налаштувати автооновлення
-GET    /api/feeds/<id>/status      — статус обробки
-GET    /api/feeds/<id>/download    — скачати фід (як attachment)
-GET    /feeds/<id>.xml             — публічний URL фіду (для Google/Meta)
-GET    /images/<filename>          — роздача зображень
+Feed Enhancer — Web Service з Google Cloud Storage
 """
 
 import os
+import io
 import uuid
 import json
 import time
+import random
+import hashlib
 import threading
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests as http_requests
 from flask import Flask, request, jsonify, send_file, send_from_directory, Response
 from feed_processor import process_feed, DEFAULT_CONFIG
 
-app = Flask(__name__, static_folder="static")
+# ─── GCS ──────────────────────────────────────────────────────────────────────
+from google.cloud import storage as gcs
+
+GCS_BUCKET  = os.getenv("GCS_BUCKET", "feed-enhancer-490908-data")
+gcs_client  = gcs.Client()
+bucket      = gcs_client.bucket(GCS_BUCKET)
+
+def gcs_upload_file(local_path: str, gcs_path: str, content_type="application/octet-stream"):
+    blob = bucket.blob(gcs_path)
+    blob.upload_from_filename(local_path, content_type=content_type)
+
+def gcs_upload_bytes(data: bytes, gcs_path: str, content_type="application/octet-stream"):
+    blob = bucket.blob(gcs_path)
+    blob.upload_from_string(data, content_type=content_type)
+
+def gcs_download_bytes(gcs_path: str) -> bytes:
+    blob = bucket.blob(gcs_path)
+    return blob.download_as_bytes()
+
+def gcs_download_to_file(gcs_path: str, local_path: str):
+    blob = bucket.blob(gcs_path)
+    blob.download_to_filename(local_path)
+
+def gcs_exists(gcs_path: str) -> bool:
+    return bucket.blob(gcs_path).exists()
+
+def gcs_delete(gcs_path: str):
+    try: bucket.blob(gcs_path).delete()
+    except: pass
+
+def gcs_public_url(gcs_path: str) -> str:
+    return f"https://storage.googleapis.com/{GCS_BUCKET}/{gcs_path}"
 
 # ─── Конфігурація ─────────────────────────────────────────────────────────────
-BASE_URL    = os.getenv("BASE_URL",   "http://localhost:8080/images/")
-SERVER_URL  = os.getenv("SERVER_URL", "http://localhost:8080")
-DATA_DIR    = Path(os.getenv("DATA_DIR", "data"))
-IMAGES_DIR  = DATA_DIR / "images"
-FEEDS_DIR   = DATA_DIR / "feeds"
-RESULTS_DIR = DATA_DIR / "results"
-DB_PATH     = DATA_DIR / "feeds.json"
+app        = Flask(__name__, static_folder="static")
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8080")
+BASE_URL   = gcs_public_url("images/")  # публічний URL для зображень у GCS
 
-for d in [DATA_DIR, IMAGES_DIR, FEEDS_DIR, RESULTS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+# Тимчасова папка для XML файлів під час обробки
+TMP_DIR = Path("/tmp/feed-enhancer")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# ─── БД ───────────────────────────────────────────────────────────────────────
-db_lock = threading.Lock()
+# ─── БД у GCS ─────────────────────────────────────────────────────────────────
+DB_GCS_PATH = "db/feeds.json"
+db_lock     = threading.Lock()
 
 def load_db():
-    if DB_PATH.exists():
-        with open(DB_PATH) as f:
-            return json.load(f)
-    return {"feeds": {}}
+    try:
+        data = gcs_download_bytes(DB_GCS_PATH)
+        return json.loads(data)
+    except Exception:
+        return {"feeds": {}}
 
 def save_db(db):
-    with open(DB_PATH, "w") as f:
-        json.dump(db, f, indent=2, ensure_ascii=False)
+    gcs_upload_bytes(
+        json.dumps(db, indent=2, ensure_ascii=False).encode(),
+        DB_GCS_PATH,
+        content_type="application/json"
+    )
 
 def get_feed(feed_id):
     with db_lock:
@@ -72,18 +96,12 @@ def delete_feed_from_db(feed_id):
         save_db(db)
 
 def log_event(feed_id: str, level: str, message: str):
-    """Додає запис до лога фіду. level: info | success | warning | error"""
     with db_lock:
         db = load_db()
         if feed_id not in db["feeds"]:
             return
         logs = db["feeds"][feed_id].get("logs", [])
-        logs.append({
-            "ts":      datetime.now().isoformat(),
-            "level":   level,
-            "message": message,
-        })
-        # Зберігаємо максимум 200 записів
+        logs.append({"ts": datetime.now().isoformat(), "level": level, "message": message})
         db["feeds"][feed_id]["logs"] = logs[-200:]
         save_db(db)
 
@@ -103,49 +121,66 @@ def public_feed_url(feed_id):
     return f"{SERVER_URL.rstrip('/')}/feeds/{feed_id}.xml"
 
 # ─── Обробка ──────────────────────────────────────────────────────────────────
-def run_processing(feed_id, input_path, cfg, source_url=None):
+def run_processing(feed_id, input_gcs_path, cfg, source_url=None):
+    # Локальні тимчасові файли
+    local_input  = str(TMP_DIR / f"{feed_id}_input.xml")
+    local_output = str(TMP_DIR / f"{feed_id}_output.xml")
+    local_images = TMP_DIR / f"{feed_id}_images"
+    local_images.mkdir(exist_ok=True)
+
     try:
         if source_url:
-            update_feed(feed_id, {"status": "processing", "progress": f"Завантаження фіду з {source_url}..."})
+            update_feed(feed_id, {"status": "processing", "progress": f"Завантаження фіду..."})
             log_event(feed_id, "info", f"Завантаження фіду з URL: {source_url}")
-            download_feed_from_url(source_url, input_path)
+            download_feed_from_url(source_url, local_input)
+            # Зберігаємо XML у GCS
+            gcs_upload_file(local_input, input_gcs_path, "application/xml")
             update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
-            log_event(feed_id, "success", "Фід успішно завантажено з URL")
+            log_event(feed_id, "success", "Фід завантажено з URL")
             cfg["source_url"] = source_url
+        else:
+            # Завантажуємо XML з GCS локально
+            gcs_download_to_file(input_gcs_path, local_input)
 
-        update_feed(feed_id, {"status": "processing", "progress": "Обробка зображень...", "progress_current": 0, "progress_total": 0})
-        log_event(feed_id, "info", f"Запуск обробки зображень (стиль: {cfg.get('banner_style','classic')}, колір: {cfg.get('border_color','#FF0000')})")
+        update_feed(feed_id, {"status": "processing", "progress": "Обробка зображень...",
+                               "progress_current": 0, "progress_total": 0})
+        log_event(feed_id, "info", f"Запуск обробки (стиль: {cfg.get('banner_style','classic')})")
 
-        output_path = str(RESULTS_DIR / f"{feed_id}.xml")
-        cfg["output_feed"] = output_path
-        cfg["output_dir"]  = str(IMAGES_DIR)
-        cfg["base_url"]    = BASE_URL
+        cfg["output_feed"] = local_output
+        cfg["output_dir"]  = str(local_images)
+        cfg["base_url"]    = gcs_public_url("images/")
 
-        # Передаємо колбек для оновлення прогресу
         def on_progress(current, total, success, skipped):
             update_feed(feed_id, {
-                "progress":         f"Обробка: {current}/{total}",
-                "progress_current": current,
-                "progress_total":   total,
-                "progress_success": success,
-                "progress_skipped": skipped,
+                "progress": f"Обробка: {current}/{total}",
+                "progress_current": current, "progress_total": total,
+                "progress_success": success, "progress_skipped": skipped,
             })
-            # Перевіряємо чи користувач запросив зупинку
             record = get_feed(feed_id)
             if record and record.get("stop_requested"):
-                return True  # сигнал зупинки
+                return True
             return False
 
-        stats = process_feed(input_path, cfg, progress_callback=on_progress)
+        stats = process_feed(local_input, cfg, progress_callback=on_progress)
 
-        # Перевіряємо чи зупинено
+        # Завантажуємо оброблені зображення в GCS
+        update_feed(feed_id, {"progress": "Завантаження зображень у хмару..."})
+        log_event(feed_id, "info", "Завантаження зображень у Google Cloud Storage...")
+        for img_file in local_images.iterdir():
+            if img_file.suffix in (".jpg", ".jpeg", ".png"):
+                gcs_upload_file(str(img_file), f"images/{img_file.name}", "image/jpeg")
+
+        # Завантажуємо результуючий XML у GCS
+        result_gcs = f"results/{feed_id}.xml"
+        gcs_upload_file(local_output, result_gcs, "application/xml")
+
         final_record = get_feed(feed_id)
         was_stopped  = final_record and final_record.get("stop_requested")
 
         update_feed(feed_id, {
             "status":           "done",
-            "result_path":      output_path,
-            "progress":         f"{'Зупинено' if was_stopped else 'Готово'}: оброблено {stats['success']} з {stats['total']}",
+            "result_gcs_path":  result_gcs,
+            "progress":         f"{'Зупинено' if was_stopped else 'Готово'}: {stats['success']}/{stats['total']}",
             "progress_current": stats["success"],
             "progress_total":   stats["total"],
             "finished_at":      datetime.now().isoformat(),
@@ -154,15 +189,22 @@ def run_processing(feed_id, input_path, cfg, source_url=None):
             "stop_requested":   False,
         })
         if was_stopped:
-            log_event(feed_id, "warning",
-                f"Генерацію зупинено користувачем: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']}")
+            log_event(feed_id, "warning", f"Зупинено: {stats['success']} оброблено з {stats['total']}")
         else:
-            log_event(feed_id, "success",
-                f"Обробку завершено: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']} товарів")
+            log_event(feed_id, "success", f"Готово: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']}")
 
     except Exception as e:
         update_feed(feed_id, {"status": "error", "progress": str(e)})
-        log_event(feed_id, "error", f"Помилка обробки: {e}")
+        log_event(feed_id, "error", f"Помилка: {e}")
+    finally:
+        # Чистимо тимчасові файли
+        import shutil
+        try: Path(local_input).unlink(missing_ok=True)
+        except: pass
+        try: Path(local_output).unlink(missing_ok=True)
+        except: pass
+        try: shutil.rmtree(str(local_images), ignore_errors=True)
+        except: pass
 
 # ─── Планувальник ─────────────────────────────────────────────────────────────
 scheduler_started = False
@@ -172,44 +214,29 @@ def scheduler_loop():
     while True:
         time.sleep(60)
         try:
-            db = load_db()
+            db  = load_db()
             now = datetime.now()
             for feed_id, record in db["feeds"].items():
                 sched = record.get("schedule", {})
-                if not sched.get("enabled"):
-                    continue
-                if record.get("status") == "processing":
-                    continue
-                if record.get("source_type") != "url" or not record.get("source_url"):
-                    continue
-
-                # Перевіряємо час запуску (HH:MM)
+                if not sched.get("enabled"): continue
+                if record.get("status") == "processing": continue
+                if record.get("source_type") != "url" or not record.get("source_url"): continue
                 run_time = sched.get("run_time", "06:00")
-                try:
-                    run_h, run_m = map(int, run_time.split(":"))
-                except Exception:
-                    run_h, run_m = 6, 0
-
-                # Запускаємо якщо поточний час збігається з потрібним (з точністю до хвилини)
-                if now.hour != run_h or now.minute != run_m:
-                    continue
-
-                # Перевіряємо чи вже запускали сьогодні
+                try:    run_h, run_m = map(int, run_time.split(":"))
+                except: run_h, run_m = 6, 0
+                if now.hour != run_h or now.minute != run_m: continue
                 last_run = sched.get("last_run")
                 if last_run:
-                    last_dt = datetime.fromisoformat(last_run)
-                    if last_dt.date() == now.date():
-                        continue  # вже запускали сьогодні
-
+                    from datetime import datetime as dt
+                    if dt.fromisoformat(last_run).date() == now.date(): continue
                 cfg = {**DEFAULT_CONFIG, **record.get("config", {})}
                 update_feed(feed_id, {
-                    "status":   "processing",
-                    "progress": f"Автооновлення о {run_time}...",
+                    "status": "processing", "progress": f"Автооновлення о {run_time}...",
                     "schedule": {**sched, "last_run": now.isoformat()},
                 })
                 threading.Thread(
                     target=run_processing,
-                    args=(feed_id, record["input_path"], cfg, record["source_url"]),
+                    args=(feed_id, record.get("input_gcs_path",""), cfg, record["source_url"]),
                     daemon=True,
                 ).start()
         except Exception as e:
@@ -222,76 +249,19 @@ def start_scheduler():
             scheduler_started = True
             threading.Thread(target=scheduler_loop, daemon=True).start()
 
-# ═══════════════════════════════════════════════════════════
-# Маршрути
-# ═══════════════════════════════════════════════════════════
+# ─── ROUTES ───────────────────────────────────────────────────────────────────
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
-
-# Публічний URL фіду — вставляй в Google Merchant / Meta
 @app.route("/feeds/<feed_id>.xml")
-def serve_feed_xml(feed_id):
+def serve_feed(feed_id):
     record = get_feed(feed_id)
-    if not record:
-        return Response("Feed not found", status=404, mimetype="text/plain")
-    if record.get("status") != "done" or not record.get("result_path"):
-        return Response("Feed not ready yet", status=202, mimetype="text/plain")
-    path = Path(record["result_path"])
-    if not path.exists():
-        return Response("Feed file missing", status=404, mimetype="text/plain")
-    return send_file(str(path), mimetype="application/xml")
-
-@app.route("/images/<filename>")
-def serve_image(filename):
-    if not (IMAGES_DIR / filename).exists():
-        return jsonify({"error": "Not found"}), 404
-    return send_from_directory(str(IMAGES_DIR), filename, mimetype="image/jpeg")
-
-
-# ── GET /api/feeds/<id>/preview — випадковий оброблений банер ─────────────────
-@app.route("/api/feeds/<feed_id>/preview", methods=["GET"])
-def feed_preview(feed_id):
-    """
-    Повертає URL випадкового обробленого зображення з фіду.
-    Парсить result XML і обирає випадковий image_link.
-    """
-    import random
-    import xml.etree.ElementTree as ET
-
-    record = get_feed(feed_id)
-    if not record:
-        return jsonify({"error": "Фід не знайдено"}), 404
-    if record.get("status") != "done" or not record.get("result_path"):
-        return jsonify({"error": "Фід ще не оброблено"}), 409
-
-    result_path = record["result_path"]
-    if not Path(result_path).exists():
-        return jsonify({"error": "Файл фіду не знайдено"}), 404
-
-    try:
-        tree = ET.parse(result_path)
-        root = tree.getroot()
-
-        # Збираємо всі image_link з результуючого фіду
-        image_urls = []
-        ns_g = "http://base.google.com/ns/1.0"
-
-        for tag in [f"{{{ns_g}}}image_link", "image_link"]:
-            for el in root.iter(tag):
-                if el.text and el.text.strip().startswith("http"):
-                    image_urls.append(el.text.strip())
-
-        if not image_urls:
-            return jsonify({"error": "Оброблених зображень не знайдено у фіді"}), 404
-
-        chosen = random.choice(image_urls)
-        total  = len(image_urls)
-        return jsonify({"image_url": chosen, "total": total})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if not record or record.get("status") != "done":
+        return "Фід не знайдено або ще не оброблено", 404
+    gcs_path = record.get("result_gcs_path")
+    if not gcs_path or not gcs_exists(gcs_path):
+        return "XML файл не знайдено", 404
+    xml_bytes = gcs_download_bytes(gcs_path)
+    return Response(xml_bytes, mimetype="application/xml",
+                    headers={"Content-Disposition": f"inline; filename={feed_id}.xml"})
 
 @app.route("/api/feeds", methods=["GET"])
 def list_feeds():
@@ -306,20 +276,20 @@ def add_feed():
     has_file = "file" in request.files and request.files["file"].filename
 
     if not feed_url and not has_file:
-        return jsonify({"error": "Надішліть файл або вкажіть URL фіду"}), 400
+        return jsonify({"error": "Надішліть файл або вкажіть URL"}), 400
 
-    feed_id    = str(uuid.uuid4())[:8]
-    input_path = str(FEEDS_DIR / f"{feed_id}_input.xml")
+    feed_id        = str(uuid.uuid4())[:8]
+    input_gcs_path = f"feeds/{feed_id}_input.xml"
 
     if feed_url:
         feed_name = request.form.get("name") or feed_url.split("/")[-1].split("?")[0] or "feed.xml"
-        Path(input_path).touch()
     else:
-        file = request.files["file"]
+        file      = request.files["file"]
         if not file.filename.endswith(".xml"):
             return jsonify({"error": "Потрібен XML файл"}), 400
         feed_name = request.form.get("name") or file.filename
-        file.save(input_path)
+        # Зберігаємо файл у GCS
+        gcs_upload_bytes(file.read(), input_gcs_path, "application/xml")
         feed_url = None
 
     cfg = {**DEFAULT_CONFIG}
@@ -332,20 +302,20 @@ def add_feed():
     cfg["domain_position"] = request.form.get("domain_position", cfg.get("domain_position", "bottom-left"))
 
     record = {
-        "id":           feed_id,
-        "name":         feed_name,
-        "source_type":  "url" if feed_url else "file",
-        "source_url":   feed_url,
-        "status":       "pending",
-        "progress":     "Очікує обробки",
-        "input_path":   input_path,
-        "result_path":  None,
-        "public_url":   None,
-        "created_at":   datetime.now().isoformat(),
-        "finished_at":  None,
-        "last_fetched": None,
-        "schedule":     {"enabled": False, "interval_hours": 24, "last_run": None},
-        "config":       {
+        "id":              feed_id,
+        "name":            feed_name,
+        "source_type":     "url" if feed_url else "file",
+        "source_url":      feed_url,
+        "status":          "pending",
+        "progress":        "Очікує обробки",
+        "input_gcs_path":  input_gcs_path,
+        "result_gcs_path": None,
+        "public_url":      None,
+        "created_at":      datetime.now().isoformat(),
+        "finished_at":     None,
+        "last_fetched":    None,
+        "schedule":        {"enabled": False, "run_time": "06:00", "interval_hours": 24, "last_run": None},
+        "config": {
             "border_color":    cfg["border_color"],
             "border_width":    cfg["border_width"],
             "badge_position":  cfg["badge_position"],
@@ -360,10 +330,9 @@ def add_feed():
 
     if request.form.get("auto_process", "true").lower() == "true":
         update_feed(feed_id, {"status": "processing"})
-        log_event(feed_id, "info", f"Стиль: {cfg['banner_style']}, колір: {cfg['border_color']}, домен: {cfg.get('domain','авто')}")
         threading.Thread(
             target=run_processing,
-            args=(feed_id, input_path, cfg, feed_url),
+            args=(feed_id, input_gcs_path, cfg, feed_url),
             daemon=True,
         ).start()
 
@@ -382,17 +351,12 @@ def process_feed_route(feed_id):
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
 
-    # Логуємо зміни конфігурації якщо вони відрізняються від збережених
     old_cfg = record.get("config", {})
     changes = []
     if body.get("banner_style") and body["banner_style"] != old_cfg.get("banner_style"):
         changes.append(f"стиль: {old_cfg.get('banner_style','?')} → {body['banner_style']}")
     if body.get("border_color") and body["border_color"] != old_cfg.get("border_color"):
         changes.append(f"колір: {old_cfg.get('border_color','?')} → {body['border_color']}")
-    if body.get("border_width") and str(body["border_width"]) != str(old_cfg.get("border_width")):
-        changes.append(f"рамка: {old_cfg.get('border_width','?')}px → {body['border_width']}px")
-    if body.get("domain") is not None and body["domain"] != old_cfg.get("domain",""):
-        changes.append(f"домен: '{old_cfg.get('domain','авто')}' → '{body['domain'] or 'авто'}'")
     if changes:
         log_event(feed_id, "info", f"Зміна налаштувань: {', '.join(changes)}")
 
@@ -400,9 +364,14 @@ def process_feed_route(feed_id):
         "border_color": cfg["border_color"], "border_width": cfg["border_width"],
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
         "banner_style": cfg["banner_style"], "domain": cfg["domain"],
+        "domain_position": cfg.get("domain_position", "bottom-left"),
     }})
-    log_event(feed_id, "info", f"Запущено обробку вручну — стиль: {cfg['banner_style']}, колір: {cfg['border_color']}")
-    threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, None), daemon=True).start()
+    log_event(feed_id, "info", f"Запущено обробку — стиль: {cfg['banner_style']}")
+    threading.Thread(
+        target=run_processing,
+        args=(feed_id, record["input_gcs_path"], cfg, None),
+        daemon=True
+    ).start()
     return jsonify({"ok": True})
 
 @app.route("/api/feeds/<feed_id>/refresh", methods=["POST"])
@@ -420,24 +389,124 @@ def refresh_feed(feed_id):
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
 
-    update_feed(feed_id, {"status": "processing", "progress": "Завантаження оновленого фіду...", "config": {
+    update_feed(feed_id, {"status": "processing", "progress": "Завантаження...", "config": {
         "border_color": cfg["border_color"], "border_width": cfg["border_width"],
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
         "banner_style": cfg["banner_style"], "domain": cfg["domain"],
+        "domain_position": cfg.get("domain_position", "bottom-left"),
     }})
     log_event(feed_id, "info", f"Оновлення з URL: {record['source_url']}")
-    threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, record["source_url"]), daemon=True).start()
+    threading.Thread(
+        target=run_processing,
+        args=(feed_id, record["input_gcs_path"], cfg, record["source_url"]),
+        daemon=True
+    ).start()
     return jsonify({"ok": True})
+
+@app.route("/api/feeds/<feed_id>/stop", methods=["POST"])
+def stop_feed(feed_id):
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Фід не знайдено"}), 404
+    if record.get("status") != "processing":
+        return jsonify({"error": "Фід не обробляється"}), 409
+    update_feed(feed_id, {"stop_requested": True})
+    log_event(feed_id, "warning", "Зупинка запрошена користувачем")
+    return jsonify({"ok": True})
+
+@app.route("/api/feeds/<feed_id>/preview-one", methods=["POST"])
+def preview_one(feed_id):
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Фід не знайдено"}), 404
+    if record.get("status") == "processing":
+        return jsonify({"error": "Фід зараз обробляється"}), 409
+
+    input_gcs_path = record.get("input_gcs_path", "")
+    local_input    = str(TMP_DIR / f"{feed_id}_preview_input.xml")
+
+    # Завантажуємо XML якщо ще немає
+    if not gcs_exists(input_gcs_path):
+        source_url = record.get("source_url")
+        if not source_url:
+            return jsonify({"error": "XML не знайдено і URL не вказано"}), 404
+        try:
+            log_event(feed_id, "info", f"Завантаження XML для превʼю...")
+            download_feed_from_url(source_url, local_input)
+            gcs_upload_file(local_input, input_gcs_path, "application/xml")
+            update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
+        except Exception as e:
+            return jsonify({"error": f"Не вдалося завантажити фід: {e}"}), 502
+    else:
+        gcs_download_to_file(input_gcs_path, local_input)
+
+    body = request.get_json(silent=True) or {}
+    cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
+    for k in ("border_color", "badge_position", "banner_style", "domain", "domain_position"):
+        if k in body and body[k]: cfg[k] = body[k]
+    for k in ("border_width", "badge_font_size"):
+        if k in body and body[k]: cfg[k] = int(body[k])
+
+    if not cfg.get("domain") and record.get("source_url"):
+        try:
+            from urllib.parse import urlparse
+            cfg["domain"] = urlparse(record["source_url"]).netloc.replace("www.", "")
+        except: pass
+
+    cfg["output_dir"] = str(TMP_DIR)
+    cfg["base_url"]   = gcs_public_url("images/")
+
+    try:
+        from feed_processor import parse_feed, extract_item_data, download_image, enhance_image, save_image, safe_str
+        _, items = parse_feed(local_input)
+        if not items:
+            return jsonify({"error": "Товари не знайдено"}), 404
+
+        img_url = price = raw_id = ""
+        for _ in range(20):
+            item    = random.choice(items)
+            data    = extract_item_data(item)
+            img_url = safe_str(data.get("image_link", ""))
+            price   = safe_str(data.get("price", ""))
+            raw_id  = safe_str(data.get("id", ""))
+            if img_url: break
+
+        if not img_url:
+            return jsonify({"error": "Не знайдено товар із зображенням"}), 404
+
+        item_id  = raw_id or hashlib.md5(img_url.encode()).hexdigest()[:8]
+        filename = f"preview_{feed_id}_{item_id}.jpg"
+        local_preview = str(TMP_DIR / filename)
+
+        img = download_image(img_url, cfg)
+        if img is None:
+            return jsonify({"error": "Не вдалося завантажити зображення"}), 502
+
+        enhanced = enhance_image(img, price, cfg)
+        img.close()
+        save_image(enhanced, filename, cfg)
+        enhanced.close()
+
+        # Завантажуємо превʼю у GCS
+        gcs_upload_file(local_preview, f"images/{filename}", "image/jpeg")
+        Path(local_preview).unlink(missing_ok=True)
+
+        import gc; gc.collect()
+
+        image_url = gcs_public_url(f"images/{filename}")
+        log_event(feed_id, "info", f"Превʼю — товар ID={item_id}, стиль={cfg.get('banner_style','classic')}")
+        return jsonify({"image_url": image_url, "item_id": item_id})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        Path(local_input).unlink(missing_ok=True)
 
 @app.route("/api/feeds/<feed_id>/log", methods=["POST"])
 def add_log_entry(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
-    body    = request.get_json(silent=True) or {}
-    level   = body.get("level", "info")
-    message = body.get("message", "")
-    if message:
-        log_event(feed_id, level, message)
+    body = request.get_json(silent=True) or {}
+    if body.get("message"):
+        log_event(feed_id, body.get("level", "info"), body["message"])
     return jsonify({"ok": True})
 
 @app.route("/api/feeds/<feed_id>/logs", methods=["DELETE"])
@@ -449,17 +518,12 @@ def clear_logs(feed_id):
 
 @app.route("/api/feeds/<feed_id>/schedule", methods=["PATCH"])
 def set_schedule(feed_id):
-    """
-    Body JSON: { "enabled": true, "interval_hours": 6 }
-    Доступні інтервали: 1, 3, 6, 12, 24, 48, 168
-    """
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Фід не знайдено"}), 404
     if record.get("source_type") != "url":
-        return jsonify({"error": "Автооновлення доступне лише для URL-фідів"}), 400
-
-    body    = request.get_json(silent=True) or {}
-    current = record.get("schedule", {})
+        return jsonify({"error": "Автооновлення лише для URL-фідів"}), 400
+    body      = request.get_json(silent=True) or {}
+    current   = record.get("schedule", {})
     new_sched = {
         "enabled":        bool(body.get("enabled", current.get("enabled", False))),
         "run_time":       body.get("run_time", current.get("run_time", "06:00")),
@@ -481,131 +545,63 @@ def feed_status(feed_id):
         "id":               record["id"],
         "status":           record["status"],
         "progress":         record["progress"],
-        "progress_current": record.get("progress_current", 0),
-        "progress_total":   record.get("progress_total", 0),
-        "progress_success": record.get("progress_success", 0),
-        "progress_skipped": record.get("progress_skipped", 0),
         "finished_at":      record.get("finished_at"),
         "stats":            record.get("stats"),
         "public_url":       record.get("public_url"),
         "logs":             record.get("logs", []),
+        "progress_current": record.get("progress_current", 0),
+        "progress_total":   record.get("progress_total", 0),
+        "progress_success": record.get("progress_success", 0),
+        "progress_skipped": record.get("progress_skipped", 0),
     })
 
 @app.route("/api/feeds/<feed_id>/download", methods=["GET"])
 def download_feed(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
-    if record["status"] != "done": return jsonify({"error": "Фід ще не оброблено"}), 409
-    log_event(feed_id, "info", f"Файл фіду скачано: enhanced_{record['name']}")
-    return send_file(record["result_path"], mimetype="application/xml",
-                     as_attachment=True, download_name=f"enhanced_{record['name']}")
+    if record["status"] != "done": return jsonify({"error": "Ще не оброблено"}), 409
+    gcs_path = record.get("result_gcs_path")
+    if not gcs_path: return jsonify({"error": "Файл не знайдено"}), 404
+    xml_bytes = gcs_download_bytes(gcs_path)
+    log_event(feed_id, "info", f"Файл скачано")
+    return Response(
+        xml_bytes,
+        mimetype="application/xml",
+        headers={"Content-Disposition": f"attachment; filename=enhanced_{record['name']}"}
+    )
+
+@app.route("/api/feeds/<feed_id>/preview", methods=["GET"])
+def preview_feed(feed_id):
+    record = get_feed(feed_id)
+    if not record or record.get("status") != "done":
+        return jsonify({"error": "Фід не готовий"}), 404
+    gcs_path = record.get("result_gcs_path")
+    if not gcs_path: return jsonify({"error": "Файл не знайдено"}), 404
+    try:
+        import xml.etree.ElementTree as ET2
+        xml_bytes = gcs_download_bytes(gcs_path)
+        root      = ET2.fromstring(xml_bytes)
+        ns_g      = "http://base.google.com/ns/1.0"
+        image_urls = []
+        for tag in [f"{{{ns_g}}}image_link", "image_link"]:
+            for el in root.iter(tag):
+                if el.text and el.text.strip().startswith("https://storage.googleapis.com"):
+                    image_urls.append(el.text.strip())
+        if not image_urls:
+            return jsonify({"error": "Зображень не знайдено"}), 404
+        return jsonify({"image_url": random.choice(image_urls), "total": len(image_urls)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/feeds/<feed_id>", methods=["DELETE"])
 def delete_feed(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
-    name = record.get("name", feed_id)
-    for key in ("input_path", "result_path"):
-        p = record.get(key)
-        if p and Path(p).exists():
-            Path(p).unlink(missing_ok=True)
+    # Видаляємо файли з GCS
+    for gcs_path in [record.get("input_gcs_path"), record.get("result_gcs_path")]:
+        if gcs_path: gcs_delete(gcs_path)
     delete_feed_from_db(feed_id)
     return jsonify({"ok": True})
-
-@app.route("/api/feeds/<feed_id>/stop", methods=["POST"])
-def stop_feed(feed_id):
-    """Зупиняє обробку фіду встановлюючи прапор зупинки."""
-    record = get_feed(feed_id)
-    if not record: return jsonify({"error": "Фід не знайдено"}), 404
-    if record.get("status") != "processing":
-        return jsonify({"error": "Фід не обробляється"}), 409
-    update_feed(feed_id, {"stop_requested": True})
-    log_event(feed_id, "warning", "Зупинка генерації запрошена користувачем")
-    return jsonify({"ok": True})
-
-
-@app.route("/api/feeds/<feed_id>/preview-one", methods=["POST"])
-def preview_one(feed_id):
-    """Обробляє один випадковий товар з фіду для превʼю."""
-    import random, xml.etree.ElementTree as ET2
-    record = get_feed(feed_id)
-    if not record: return jsonify({"error": "Фід не знайдено"}), 404
-    if record.get("status") == "processing":
-        return jsonify({"error": "Фід зараз обробляється"}), 409
-
-    input_path = record.get("input_path")
-
-    # Якщо XML ще не завантажений (новий URL-фід) — завантажуємо зараз
-    if not input_path or not Path(input_path).exists() or Path(input_path).stat().st_size == 0:
-        source_url = record.get("source_url")
-        if not source_url:
-            return jsonify({"error": "XML файл не знайдено і URL джерела не вказано"}), 404
-        try:
-            log_event(feed_id, "info", f"Завантаження XML для превʼю з {source_url}")
-            download_feed_from_url(source_url, input_path)
-            update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
-        except Exception as e:
-            return jsonify({"error": f"Не вдалося завантажити фід: {e}"}), 502
-
-    body = request.get_json(silent=True) or {}
-    cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
-    for k in ("border_color", "badge_position", "banner_style", "domain", "domain_position"):
-        if k in body and body[k]: cfg[k] = body[k]
-    for k in ("border_width", "badge_font_size"):
-        if k in body and body[k]: cfg[k] = int(body[k])
-
-    # Якщо домен не вказаний — витягуємо з URL фіду
-    if not cfg.get("domain") and record.get("source_url"):
-        try:
-            from urllib.parse import urlparse
-            cfg["domain"] = urlparse(record["source_url"]).netloc.replace("www.", "")
-        except Exception:
-            pass
-
-    cfg["output_dir"] = str(IMAGES_DIR)
-    cfg["base_url"]   = BASE_URL
-
-    try:
-        from feed_processor import parse_feed, extract_item_data, download_image, enhance_image, save_image, safe_str
-        _, items = parse_feed(input_path)
-        if not items:
-            return jsonify({"error": "Товари не знайдено у фіді"}), 404
-
-        # Вибираємо випадковий товар з зображенням
-        import hashlib
-        img_url = price = raw_id = ""
-        for _ in range(20):
-            item = random.choice(items)
-            data    = extract_item_data(item)
-            img_url = safe_str(data.get("image_link", ""))
-            price   = safe_str(data.get("price", ""))
-            raw_id  = safe_str(data.get("id", ""))
-            if img_url:
-                break
-
-        if not img_url:
-            return jsonify({"error": "Не вдалося знайти товар із зображенням"}), 404
-
-        item_id  = raw_id or hashlib.md5(img_url.encode()).hexdigest()[:8]
-        filename = f"preview_{feed_id}_{item_id}.jpg"
-
-        img = download_image(img_url, cfg)
-        if img is None:
-            return jsonify({"error": "Не вдалося завантажити зображення товару"}), 502
-
-        enhanced = enhance_image(img, price, cfg)
-        img.close()
-        save_image(enhanced, filename, cfg)
-        enhanced.close()
-
-        import gc; gc.collect()
-
-        image_url = f"{BASE_URL.rstrip('/')}/{filename}" if BASE_URL else f"/images/{filename}"
-        log_event(feed_id, "info", f"Превʼю згенеровано — товар ID={item_id}, стиль={cfg.get('banner_style','classic')}")
-        return jsonify({"image_url": image_url, "item_id": item_id})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/")
 def index():
