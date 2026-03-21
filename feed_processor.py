@@ -27,13 +27,13 @@ DEFAULT_CONFIG = {
     "border_width":    18,
     "badge_font_size": 52,
     "badge_position":  "bottom-right",
-    "domain":          "",           # напр. "myshop.com" — якщо порожньо, не показується
-    "output_size":     (1200, 1200),
-    "output_quality":  90,
+    "domain":          "",
+    "output_size":     (800, 800),   # 800px економить ~2x RAM vs 1200px
+    "output_quality":  85,
     "output_dir":      "enhanced_images",
     "request_timeout": 15,
-    "retry_count":     3,
-    "retry_delay":     2,
+    "retry_count":     2,            # зменшено з 3 до 2 для швидшої обробки
+    "retry_delay":     1,
     "output_feed":     "enhanced_feed.xml",
     "base_url":        "",
 }
@@ -116,9 +116,17 @@ def download_image(url: str, cfg: dict):
     if not url or not url.startswith("http"): return None
     for attempt in range(1, cfg["retry_count"] + 1):
         try:
-            resp = requests.get(url, timeout=cfg["request_timeout"])
+            resp = requests.get(url, timeout=cfg["request_timeout"], stream=True)
             resp.raise_for_status()
-            return Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            # Читаємо контент одразу у BytesIO без зберігання в пам'яті Python
+            buf = io.BytesIO()
+            for chunk in resp.iter_content(chunk_size=8192):
+                buf.write(chunk)
+            resp.close()
+            buf.seek(0)
+            img = Image.open(buf).convert("RGBA")
+            buf.close()
+            return img
         except Exception as e:
             log.warning(f"Спроба {attempt} — {url}: {e}")
             if attempt < cfg["retry_count"]: time.sleep(cfg["retry_delay"])
@@ -498,12 +506,15 @@ def set_image_link(item, new_url: str):
 
 # ─── Головна функція ──────────────────────────────────────────────────────────
 
-def process_feed(feed_path: str, cfg: dict) -> dict:
+def process_feed(feed_path: str, cfg: dict, progress_callback=None) -> dict:
+    import gc
     tree, items = parse_feed(feed_path)
     total = len(items)
     success = skipped = 0
 
     for i, item in enumerate(items, 1):
+        img = None
+        enhanced = None
         try:
             data    = extract_item_data(item)
             img_url = safe_str(data.get("image_link",""))
@@ -512,6 +523,9 @@ def process_feed(feed_path: str, cfg: dict) -> dict:
 
             item_id = raw_id or (hashlib.md5(img_url.encode()).hexdigest()[:8] if img_url else f"item_{i}")
             log.info(f"[{i}/{total}] ID={item_id}  Ціна={price}  URL={img_url[:80]}")
+
+            if progress_callback and (i == 1 or i % 5 == 0 or i == total):
+                progress_callback(i, total, success, skipped)
 
             if not img_url:
                 log.warning("  → Немає URL, пропускаємо.")
@@ -525,8 +539,17 @@ def process_feed(feed_path: str, cfg: dict) -> dict:
                 continue
 
             enhanced = enhance_image(img, price, cfg)
+
+            # Явно вивантажуємо оригінал з пам'яті
+            img.close()
+            img = None
+
             filename = f"{item_id}.jpg"
             save_image(enhanced, filename, cfg)
+
+            # Явно вивантажуємо оброблене зображення
+            enhanced.close()
+            enhanced = None
 
             base = safe_str(cfg.get("base_url",""))
             new_url = (base.rstrip("/") + "/" + filename) if base else str(Path(cfg["output_dir"]) / filename)
@@ -536,6 +559,20 @@ def process_feed(feed_path: str, cfg: dict) -> dict:
         except Exception as e:
             log.error(f"  → Помилка: {e}")
             skipped += 1
+        finally:
+            # Гарантовано чистимо пам'ять навіть при помилці
+            if img is not None:
+                try: img.close()
+                except: pass
+            if enhanced is not None:
+                try: enhanced.close()
+                except: pass
+            # Запускаємо збирач сміття кожні 50 зображень
+            if i % 50 == 0:
+                gc.collect()
+
+    # Фінальна очистка
+    gc.collect()
 
     tree.write(safe_str(cfg.get("output_feed","enhanced_feed.xml")), encoding="utf-8", xml_declaration=True)
     log.info(f"\n✅ Готово! Оброблено: {success}/{total}, пропущено: {skipped}")

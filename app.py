@@ -71,6 +71,22 @@ def delete_feed_from_db(feed_id):
         db["feeds"].pop(feed_id, None)
         save_db(db)
 
+def log_event(feed_id: str, level: str, message: str):
+    """Додає запис до лога фіду. level: info | success | warning | error"""
+    with db_lock:
+        db = load_db()
+        if feed_id not in db["feeds"]:
+            return
+        logs = db["feeds"][feed_id].get("logs", [])
+        logs.append({
+            "ts":      datetime.now().isoformat(),
+            "level":   level,
+            "message": message,
+        })
+        # Зберігаємо максимум 200 записів
+        db["feeds"][feed_id]["logs"] = logs[-200:]
+        save_db(db)
+
 # ─── Утиліти ──────────────────────────────────────────────────────────────────
 def download_feed_from_url(url, dest_path):
     resp = http_requests.get(url, timeout=30, allow_redirects=True)
@@ -91,29 +107,48 @@ def run_processing(feed_id, input_path, cfg, source_url=None):
     try:
         if source_url:
             update_feed(feed_id, {"status": "processing", "progress": f"Завантаження фіду з {source_url}..."})
+            log_event(feed_id, "info", f"Завантаження фіду з URL: {source_url}")
             download_feed_from_url(source_url, input_path)
             update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
-            cfg["source_url"] = source_url  # для автовитягування домену
+            log_event(feed_id, "success", "Фід успішно завантажено з URL")
+            cfg["source_url"] = source_url
 
-        update_feed(feed_id, {"status": "processing", "progress": "Обробка зображень..."})
+        update_feed(feed_id, {"status": "processing", "progress": "Обробка зображень...", "progress_current": 0, "progress_total": 0})
+        log_event(feed_id, "info", f"Запуск обробки зображень (стиль: {cfg.get('banner_style','classic')}, колір: {cfg.get('border_color','#FF0000')})")
 
         output_path = str(RESULTS_DIR / f"{feed_id}.xml")
         cfg["output_feed"] = output_path
         cfg["output_dir"]  = str(IMAGES_DIR)
         cfg["base_url"]    = BASE_URL
 
-        stats = process_feed(input_path, cfg)
+        # Передаємо колбек для оновлення прогресу
+        def on_progress(current, total, success, skipped):
+            update_feed(feed_id, {
+                "progress":         f"Обробка: {current}/{total}",
+                "progress_current": current,
+                "progress_total":   total,
+                "progress_success": success,
+                "progress_skipped": skipped,
+            })
+
+        stats = process_feed(input_path, cfg, progress_callback=on_progress)
 
         update_feed(feed_id, {
-            "status":      "done",
-            "result_path": output_path,
-            "progress":    f"Готово: оброблено {stats['success']} з {stats['total']}",
-            "finished_at": datetime.now().isoformat(),
-            "stats":       stats,
-            "public_url":  public_feed_url(feed_id),
+            "status":           "done",
+            "result_path":      output_path,
+            "progress":         f"Готово: оброблено {stats['success']} з {stats['total']}",
+            "progress_current": stats["success"],
+            "progress_total":   stats["total"],
+            "finished_at":      datetime.now().isoformat(),
+            "stats":            stats,
+            "public_url":       public_feed_url(feed_id),
         })
+        log_event(feed_id, "success",
+            f"Обробку завершено: {stats['success']} оброблено, {stats['skipped']} пропущено з {stats['total']} товарів")
+
     except Exception as e:
         update_feed(feed_id, {"status": "error", "progress": str(e)})
+        log_event(feed_id, "error", f"Помилка обробки: {e}")
 
 # ─── Планувальник ─────────────────────────────────────────────────────────────
 scheduler_started = False
@@ -133,16 +168,29 @@ def scheduler_loop():
                     continue
                 if record.get("source_type") != "url" or not record.get("source_url"):
                     continue
-                interval_h = int(sched.get("interval_hours", 24))
-                last_run   = sched.get("last_run")
+
+                # Перевіряємо час запуску (HH:MM)
+                run_time = sched.get("run_time", "06:00")
+                try:
+                    run_h, run_m = map(int, run_time.split(":"))
+                except Exception:
+                    run_h, run_m = 6, 0
+
+                # Запускаємо якщо поточний час збігається з потрібним (з точністю до хвилини)
+                if now.hour != run_h or now.minute != run_m:
+                    continue
+
+                # Перевіряємо чи вже запускали сьогодні
+                last_run = sched.get("last_run")
                 if last_run:
-                    next_run = datetime.fromisoformat(last_run) + timedelta(hours=interval_h)
-                    if now < next_run:
-                        continue
+                    last_dt = datetime.fromisoformat(last_run)
+                    if last_dt.date() == now.date():
+                        continue  # вже запускали сьогодні
+
                 cfg = {**DEFAULT_CONFIG, **record.get("config", {})}
                 update_feed(feed_id, {
                     "status":   "processing",
-                    "progress": "Автооновлення...",
+                    "progress": f"Автооновлення о {run_time}...",
                     "schedule": {**sched, "last_run": now.isoformat()},
                 })
                 threading.Thread(
@@ -292,9 +340,11 @@ def add_feed():
         },
     }
     update_feed(feed_id, record)
+    log_event(feed_id, "info", f"Фід створено: {feed_name} ({'URL' if feed_url else 'файл'})")
 
     if request.form.get("auto_process", "true").lower() == "true":
         update_feed(feed_id, {"status": "processing"})
+        log_event(feed_id, "info", f"Стиль: {cfg['banner_style']}, колір: {cfg['border_color']}, домен: {cfg.get('domain','авто')}")
         threading.Thread(
             target=run_processing,
             args=(feed_id, input_path, cfg, feed_url),
@@ -316,11 +366,26 @@ def process_feed_route(feed_id):
     for k in ("border_width", "badge_font_size"):
         if k in body: cfg[k] = int(body[k])
 
+    # Логуємо зміни конфігурації якщо вони відрізняються від збережених
+    old_cfg = record.get("config", {})
+    changes = []
+    if body.get("banner_style") and body["banner_style"] != old_cfg.get("banner_style"):
+        changes.append(f"стиль: {old_cfg.get('banner_style','?')} → {body['banner_style']}")
+    if body.get("border_color") and body["border_color"] != old_cfg.get("border_color"):
+        changes.append(f"колір: {old_cfg.get('border_color','?')} → {body['border_color']}")
+    if body.get("border_width") and str(body["border_width"]) != str(old_cfg.get("border_width")):
+        changes.append(f"рамка: {old_cfg.get('border_width','?')}px → {body['border_width']}px")
+    if body.get("domain") is not None and body["domain"] != old_cfg.get("domain",""):
+        changes.append(f"домен: '{old_cfg.get('domain','авто')}' → '{body['domain'] or 'авто'}'")
+    if changes:
+        log_event(feed_id, "info", f"Зміна налаштувань: {', '.join(changes)}")
+
     update_feed(feed_id, {"status": "processing", "progress": "Запущено", "config": {
         "border_color": cfg["border_color"], "border_width": cfg["border_width"],
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
         "banner_style": cfg["banner_style"], "domain": cfg["domain"],
     }})
+    log_event(feed_id, "info", f"Запущено обробку вручну — стиль: {cfg['banner_style']}, колір: {cfg['border_color']}")
     threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, None), daemon=True).start()
     return jsonify({"ok": True})
 
@@ -344,7 +409,26 @@ def refresh_feed(feed_id):
         "badge_position": cfg["badge_position"], "badge_font_size": cfg["badge_font_size"],
         "banner_style": cfg["banner_style"], "domain": cfg["domain"],
     }})
+    log_event(feed_id, "info", f"Оновлення з URL: {record['source_url']}")
     threading.Thread(target=run_processing, args=(feed_id, record["input_path"], cfg, record["source_url"]), daemon=True).start()
+    return jsonify({"ok": True})
+
+@app.route("/api/feeds/<feed_id>/log", methods=["POST"])
+def add_log_entry(feed_id):
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Не знайдено"}), 404
+    body    = request.get_json(silent=True) or {}
+    level   = body.get("level", "info")
+    message = body.get("message", "")
+    if message:
+        log_event(feed_id, level, message)
+    return jsonify({"ok": True})
+
+@app.route("/api/feeds/<feed_id>/logs", methods=["DELETE"])
+def clear_logs(feed_id):
+    record = get_feed(feed_id)
+    if not record: return jsonify({"error": "Фід не знайдено"}), 404
+    update_feed(feed_id, {"logs": []})
     return jsonify({"ok": True})
 
 @app.route("/api/feeds/<feed_id>/schedule", methods=["PATCH"])
@@ -362,10 +446,15 @@ def set_schedule(feed_id):
     current = record.get("schedule", {})
     new_sched = {
         "enabled":        bool(body.get("enabled", current.get("enabled", False))),
-        "interval_hours": int(body.get("interval_hours", current.get("interval_hours", 24))),
+        "run_time":       body.get("run_time", current.get("run_time", "06:00")),
+        "interval_hours": 24,
         "last_run":       current.get("last_run"),
     }
     update_feed(feed_id, {"schedule": new_sched})
+    if new_sched["enabled"]:
+        log_event(feed_id, "success", f"Автооновлення увімкнено — щодня о {new_sched['run_time']}")
+    else:
+        log_event(feed_id, "warning", "Автооновлення вимкнено")
     return jsonify({"ok": True, "schedule": new_sched})
 
 @app.route("/api/feeds/<feed_id>/status", methods=["GET"])
@@ -373,12 +462,17 @@ def feed_status(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
     return jsonify({
-        "id":          record["id"],
-        "status":      record["status"],
-        "progress":    record["progress"],
-        "finished_at": record.get("finished_at"),
-        "stats":       record.get("stats"),
-        "public_url":  record.get("public_url"),
+        "id":               record["id"],
+        "status":           record["status"],
+        "progress":         record["progress"],
+        "progress_current": record.get("progress_current", 0),
+        "progress_total":   record.get("progress_total", 0),
+        "progress_success": record.get("progress_success", 0),
+        "progress_skipped": record.get("progress_skipped", 0),
+        "finished_at":      record.get("finished_at"),
+        "stats":            record.get("stats"),
+        "public_url":       record.get("public_url"),
+        "logs":             record.get("logs", []),
     })
 
 @app.route("/api/feeds/<feed_id>/download", methods=["GET"])
@@ -386,6 +480,7 @@ def download_feed(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
     if record["status"] != "done": return jsonify({"error": "Фід ще не оброблено"}), 409
+    log_event(feed_id, "info", f"Файл фіду скачано: enhanced_{record['name']}")
     return send_file(record["result_path"], mimetype="application/xml",
                      as_attachment=True, download_name=f"enhanced_{record['name']}")
 
@@ -393,6 +488,7 @@ def download_feed(feed_id):
 def delete_feed(feed_id):
     record = get_feed(feed_id)
     if not record: return jsonify({"error": "Не знайдено"}), 404
+    name = record.get("name", feed_id)
     for key in ("input_path", "result_path"):
         p = record.get(key)
         if p and Path(p).exists():
