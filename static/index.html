@@ -1535,11 +1535,11 @@ async function previewOne(id) {
     domain:          document.getElementById('d-domain')?.value,
   };
 
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Генеруємо...'; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Завантаження...'; }
   wrap.innerHTML = `<div class="preview-empty">
     <div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:#818cf8;
                 border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px"></div>
-    Обробляємо один товар...
+    Завантажуємо фід і генеруємо превʼю...
   </div>`;
 
   try {
@@ -1551,8 +1551,10 @@ async function previewOne(id) {
     `;
     const counter = document.getElementById('preview-counter');
     if (counter) counter.textContent = data.item_id ? `Товар ID: ${data.item_id}` : '';
+    toast('✅ Превʼю готове!');
   } catch(e) {
     wrap.innerHTML = `<div class="preview-empty"><span class="icon">⚠️</span>${esc(e.message)}</div>`;
+    toast(e.message, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '👁 Обробити 1 товар для превʼю'; }
   }

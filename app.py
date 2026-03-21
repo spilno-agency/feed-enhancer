@@ -532,8 +532,18 @@ def preview_one(feed_id):
         return jsonify({"error": "Фід зараз обробляється"}), 409
 
     input_path = record.get("input_path")
-    if not input_path or not Path(input_path).exists():
-        return jsonify({"error": "Вихідний XML файл не знайдено"}), 404
+
+    # Якщо XML ще не завантажений (новий URL-фід) — завантажуємо зараз
+    if not input_path or not Path(input_path).exists() or Path(input_path).stat().st_size == 0:
+        source_url = record.get("source_url")
+        if not source_url:
+            return jsonify({"error": "XML файл не знайдено і URL джерела не вказано"}), 404
+        try:
+            log_event(feed_id, "info", f"Завантаження XML для превʼю з {source_url}")
+            download_feed_from_url(source_url, input_path)
+            update_feed(feed_id, {"last_fetched": datetime.now().isoformat()})
+        except Exception as e:
+            return jsonify({"error": f"Не вдалося завантажити фід: {e}"}), 502
 
     body = request.get_json(silent=True) or {}
     cfg  = {**DEFAULT_CONFIG, **record.get("config", {})}
@@ -541,6 +551,14 @@ def preview_one(feed_id):
         if k in body and body[k]: cfg[k] = body[k]
     for k in ("border_width", "badge_font_size"):
         if k in body and body[k]: cfg[k] = int(body[k])
+
+    # Якщо домен не вказаний — витягуємо з URL фіду
+    if not cfg.get("domain") and record.get("source_url"):
+        try:
+            from urllib.parse import urlparse
+            cfg["domain"] = urlparse(record["source_url"]).netloc.replace("www.", "")
+        except Exception:
+            pass
 
     cfg["output_dir"] = str(IMAGES_DIR)
     cfg["base_url"]   = BASE_URL
@@ -551,25 +569,27 @@ def preview_one(feed_id):
         if not items:
             return jsonify({"error": "Товари не знайдено у фіді"}), 404
 
-        # Вибираємо випадковий товар
+        # Вибираємо випадковий товар з зображенням
         import hashlib
-        for _ in range(10):
+        img_url = price = raw_id = ""
+        for _ in range(20):
             item = random.choice(items)
             data    = extract_item_data(item)
-            img_url = safe_str(data.get("image_link",""))
-            price   = safe_str(data.get("price",""))
-            raw_id  = safe_str(data.get("id",""))
-            if img_url: break
+            img_url = safe_str(data.get("image_link", ""))
+            price   = safe_str(data.get("price", ""))
+            raw_id  = safe_str(data.get("id", ""))
+            if img_url:
+                break
 
         if not img_url:
             return jsonify({"error": "Не вдалося знайти товар із зображенням"}), 404
 
-        item_id = raw_id or hashlib.md5(img_url.encode()).hexdigest()[:8]
+        item_id  = raw_id or hashlib.md5(img_url.encode()).hexdigest()[:8]
         filename = f"preview_{feed_id}_{item_id}.jpg"
 
         img = download_image(img_url, cfg)
         if img is None:
-            return jsonify({"error": "Не вдалося завантажити зображення"}), 502
+            return jsonify({"error": "Не вдалося завантажити зображення товару"}), 502
 
         enhanced = enhance_image(img, price, cfg)
         img.close()
@@ -579,7 +599,7 @@ def preview_one(feed_id):
         import gc; gc.collect()
 
         image_url = f"{BASE_URL.rstrip('/')}/{filename}" if BASE_URL else f"/images/{filename}"
-        log_event(feed_id, "info", f"Превʼю згенеровано для товару ID={item_id}, стиль={cfg.get('banner_style','classic')}")
+        log_event(feed_id, "info", f"Превʼю згенеровано — товар ID={item_id}, стиль={cfg.get('banner_style','classic')}")
         return jsonify({"image_url": image_url, "item_id": item_id})
 
     except Exception as e:
