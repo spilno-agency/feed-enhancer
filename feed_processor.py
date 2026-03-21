@@ -476,9 +476,8 @@ STYLE_MAP = {
 
 
 def enhance_image(original_img: Image.Image, price: str, cfg: dict) -> Image.Image:
-    # Зображення вже правильного розміру після download_image
-    # Копіюємо тільки якщо потрібно (уникаємо зайвої копії)
-    img    = original_img  # працюємо напряму, не копіюємо
+    # Завжди копіюємо — щоб не зіпсувати оригінал і уникнути "closed image"
+    img    = original_img.copy()
     style  = safe_str(cfg.get("banner_style", "classic"))
     domain = safe_str(cfg.get("domain", ""))
 
